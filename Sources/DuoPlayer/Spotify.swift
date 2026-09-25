@@ -9,7 +9,7 @@ import CryptoKit
     // Loopback redirect: Spotify always accepts it for desktop apps. Add it to the app's Redirect URIs.
     static let port: NWEndpoint.Port = 8898
     static let redirect = "http://127.0.0.1:8898/callback"
-    static let scopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read user-library-modify"
+    static let scopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read user-library-modify playlist-read-private user-top-read"
 
     // Client IDs are public (PKCE needs no secret). SPOTIFY_CLIENT_ID overrides it for a different app.
     let clientID = ProcessInfo.processInfo.environment["SPOTIFY_CLIENT_ID"] ?? "65d4ea2285b047059f3b7bb393e3d212"
@@ -157,6 +157,9 @@ struct SPDevice: Decodable, Identifiable {
 }
 struct SPPlayback: Decodable { let is_playing: Bool; let progress_ms: Int?; let item: SPTrack?; let device: SPDevice? }
 struct SPSavedAlbums: Decodable { struct Item: Decodable { let album: SPAlbum }; let items: [Item] }
+struct SPPlaylists: Decodable { struct Item: Decodable { let name: String; let uri: String; let images: [SPImage]? }; let items: [Item?] }
+struct SPMe: Decodable { struct F: Decodable { let total: Int }; let display_name: String?; let images: [SPImage]?; let followers: F? }
+struct SPTopArtists: Decodable { struct A: Decodable { let name: String; let uri: String; let images: [SPImage]? }; let items: [A] }
 struct SPDevices: Decodable { let devices: [SPDevice] }
 struct SPQueue: Decodable { let queue: [SPTrack] }
 

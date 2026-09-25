@@ -35,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             panel.setFrameOrigin(NSPoint(x: f.maxX - size.width - 20, y: f.maxY - size.height - 20))
         }
         panel.makeKeyAndOrderFront(nil)
+        NSApp.setActivationPolicy(.regular)   // show in the Dock and Cmd-Tab
         NSApp.activate()
     }
 }
