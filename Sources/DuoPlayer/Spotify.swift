@@ -52,6 +52,30 @@ import CryptoKit
         accessToken = nil
     }
 
+    // Browser page shown after Spotify redirects back: dark card, Spotify logo, then tries to close itself.
+    static let callbackPage = """
+    <!doctype html><html><head><meta charset="utf-8"><title>Duo Player · Connected</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>
+    :root{color-scheme:dark}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 30% 20%,#1f3a2a,#0b0b0c 60%);
+    font:15px -apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:#fff}
+    .card{padding:40px 44px;border-radius:28px;background:rgba(255,255,255,.06);border:.5px solid rgba(255,255,255,.18);
+    backdrop-filter:blur(30px);text-align:center;max-width:320px;animation:in .6s cubic-bezier(.2,.8,.2,1)}
+    svg{width:64px;height:64px;filter:drop-shadow(0 0 24px rgba(29,185,84,.55))}
+    h1{font-size:22px;margin:18px 0 6px}
+    p{margin:0;color:rgba(255,255,255,.62);line-height:1.45}
+    .ok{display:inline-flex;gap:6px;align-items:center;margin-top:22px;padding:8px 14px;border-radius:99px;
+    background:#1DB954;color:#000;font-weight:700;font-size:13px}
+    @keyframes in{from{opacity:0;transform:translateY(8px) scale(.98);filter:blur(6px)}}
+    </style></head><body><div class="card">
+    <svg viewBox="0 0 24 24"><path fill="#1DB954" d="\(SpotifyLogo.d)"/></svg>
+    <h1>You're connected</h1>
+    <p>Duo Player is now linked to Spotify.<br>You can close this tab and head back to the player.</p>
+    <div class="ok">✓ Signed in</div>
+    </div><script>setTimeout(()=>window.close(),2500)</script></body></html>
+    """
+
     /// Waits for the browser to hit http://127.0.0.1:8898/callback?... and returns its query items.
     /// ponytail: one-shot HTTP read, no timeout; the user can click Sign in again to restart.
     private static func awaitCallback() async throws -> [String: String] {
@@ -67,7 +91,7 @@ import CryptoKit
                     let target = request.split(separator: " ").dropFirst().first.map(String.init) ?? ""
                     guard target.hasPrefix("/callback"), !once.done else { conn.cancel(); return }
                     once.done = true
-                    let html = "<html><body style='font:16px -apple-system;text-align:center;padding:60px'>Signed in. You can close this tab.</body></html>"
+                    let html = Self.callbackPage
                     let reply = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(html.utf8.count)\r\nConnection: close\r\n\r\n\(html)"
                     conn.send(content: Data(reply.utf8), completion: .contentProcessed { _ in conn.cancel() })
                     listener.cancel()
@@ -155,7 +179,16 @@ struct SPTrack: Decodable { let id: String; let name: String; let duration_ms: I
 struct SPDevice: Decodable, Identifiable {
     let id: String?; let name: String; let is_active: Bool
 }
-struct SPPlayback: Decodable { let is_playing: Bool; let progress_ms: Int?; let item: SPTrack?; let device: SPDevice? }
+struct SPPlayback: Decodable {
+    struct Context: Decodable { let uri: String; let type: String }
+    let is_playing: Bool; let progress_ms: Int?; let item: SPTrack?; let device: SPDevice?; let context: Context?
+}
+struct SPSimpleTrack: Decodable { let id: String; let name: String; let duration_ms: Int; let artists: [SPNamed] }
+struct SPAlbumFull: Decodable { struct T: Decodable { let items: [SPSimpleTrack] }; let name: String; let images: [SPImage]; let tracks: T }
+struct SPPlaylistFull: Decodable {
+    struct T: Decodable { struct I: Decodable { let track: SPTrack? }; let items: [I] }
+    let name: String; let tracks: T
+}
 struct SPSavedAlbums: Decodable { struct Item: Decodable { let album: SPAlbum }; let items: [Item] }
 struct SPPlaylists: Decodable { struct Item: Decodable { let name: String; let uri: String; let images: [SPImage]? }; let items: [Item?] }
 struct SPMe: Decodable { struct F: Decodable { let total: Int }; let display_name: String?; let images: [SPImage]?; let followers: F? }

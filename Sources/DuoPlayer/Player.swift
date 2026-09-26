@@ -36,10 +36,18 @@ struct Album: Identifiable {
     var me: SPMe?
     var topArtistsNote: String?   // why top artists are missing
     var topArtists: [Album] = []   // uri/name/art; playing the uri plays the artist
-    var queue: [Track] = []         // up next, from Spotify
+    var queue: [Track] = []         // up next as shown: repeats removed
+    private var rawQueue: [Track] = []   // Spotify's real queue, repeats kept: skip(to:) counts "next" presses in this
     var devices: [SPDevice] = []
 
     var open = false
+    var contextURI: String?         // what's playing from: playlist/album (Spotify context), else the track's album
+    var contextName = ""
+    var listURI: String?            // what the open list shows (the poll keeps rewriting contextURI)
+    var albumURI: String?           // current song's album: fallback when a playlist can't be read
+    var contextTracks: [Track] = []
+    var contextBack = "Albums"      // tab the back button returns to
+    var tall = false                // extra album row of height; default is the normal size
     var logins = 0
     var loggingIn = false           // sign-in button shows a spinner
     var tab = "Albums"              // left screen tab (here, not @State, so fold copies match)
@@ -112,6 +120,8 @@ struct Album: Identifiable {
         message = nil
         playing = s.is_playing
         if !seeking { progress = Double(s.progress_ms ?? 0) / 1000 }
+        albumURI = item.album.uri
+        contextURI = s.context.map(\.uri).flatMap { $0.contains(":playlist:") || $0.contains(":album:") ? $0 : nil } ?? item.album.uri
         if item.id != track?.id { await trackChanged(item) }
         if albums.isEmpty { albums = (try? await loadAlbums()) ?? [] }
         if me == nil { me = try? await spotify.get("/me") }
@@ -136,9 +146,7 @@ struct Album: Identifiable {
     private func trackChanged(_ item: SPTrack) async {
         let t = Track(item)
         track = t
-        let q: SPQueue? = try? await spotify.get("/me/player/queue")
-        var seen = Set<String>()   // Spotify repeats the queue on loop/repeat; show each song once
-        queue = (q?.queue.map(Track.init) ?? []).filter { seen.insert($0.id).inserted }
+        await loadQueue()   // Spotify repeats the queue on loop/repeat; shown once each
         lyrics = []
         let liked: [Bool]? = try? await spotify.get("/me/tracks/contains", query: ["ids": t.id])
         self.liked = liked?.first ?? false
@@ -174,6 +182,20 @@ struct Album: Identifiable {
         }
     }
 
+    /// Reads Spotify's queue into rawQueue (real order) and queue (shown, repeats removed).
+    @discardableResult
+    func loadQueue() async -> [Track] {
+        let q: SPQueue? = try? await spotify.get("/me/player/queue")
+        setQueue(q?.queue.map(Track.init) ?? [])
+        return rawQueue
+    }
+
+    private func setQueue(_ real: [Track]) {
+        rawQueue = real
+        var seen = Set<String>()
+        queue = real.filter { seen.insert($0.id).inserted }
+    }
+
     func togglePlay() {
         playing.toggle()
         send("PUT", playing ? "/me/player/play" : "/me/player/pause")
@@ -183,8 +205,12 @@ struct Album: Identifiable {
 
     /// Spotify can't jump into the queue directly, so skip forward until we reach it.
     func skip(to t: Track) {
-        guard let i = queue.firstIndex(of: t) else { return }
+        // Up next is just the current song again (repeat one): "next" would leave the repeat and jump
+        // somewhere else, so restart the song instead.
+        if t.id == track?.id { seek(to: 0); return }
         Task {
+            // Count "next" presses in Spotify's real queue, read fresh (the shown list drops repeats and may be ahead of Spotify).
+            guard let i = await loadQueue().firstIndex(where: { $0.id == t.id }) else { return }
             do { for _ in 0...i { try await spotify.call("POST", "/me/player/next") } } catch { _ = handle(error) }
         }
     }
@@ -196,6 +222,39 @@ struct Album: Identifiable {
     func seek(to seconds: Double) {
         progress = seconds
         send("PUT", "/me/player/seek", query: ["position_ms": String(Int(seconds * 1000))])
+    }
+
+    // Title tapped: list the tracks of the playlist/album it's playing from, on the left screen.
+    func openContext() {
+        guard let uri = contextURI else { return }
+        let id = String(uri.split(separator: ":").last ?? "")
+        if tab != "Context" { contextBack = tab }
+        tab = "Context"; showLyrics = false; open = true
+        contextName = ""; contextTracks = []; listURI = uri
+        Task {
+            if uri.contains(":playlist:"), let r: SPPlaylistFull = try? await spotify.get("/playlists/\(id)") {
+                contextName = r.name
+                contextTracks = r.tracks.items.compactMap { $0.track.map(Track.init) }
+                return
+            }
+            // Album context, or a playlist Spotify won't share with dev-mode apps (e.g. its own mixes): show the song's album.
+            let albumURI = uri.contains(":album:") ? uri : (self.albumURI ?? uri)
+            listURI = albumURI
+            let albumID = String(albumURI.split(separator: ":").last ?? "")
+            if let a: SPAlbumFull = try? await spotify.get("/albums/\(albumID)") {
+                contextName = a.name
+                contextTracks = a.tracks.items.map {
+                    Track(id: $0.id, title: $0.name, artist: $0.artists.map(\.name).joined(separator: ", "), album: a.name,
+                          art: a.images.first?.url, duration: Double($0.duration_ms) / 1000)
+                }
+            } else { contextName = "Couldn't load this list" }
+        }
+    }
+
+    func play(_ t: Track, inContext uri: String?) {
+        var body: [String: Any] = ["offset": ["uri": "spotify:track:\(t.id)"]]
+        if let uri { body["context_uri"] = uri } else { body = ["uris": ["spotify:track:\(t.id)"]] }
+        send("PUT", "/me/player/play", body: body)
     }
 
     func play(_ album: Album) { send("PUT", "/me/player/play", body: ["context_uri": album.uri]) }

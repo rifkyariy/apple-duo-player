@@ -3,6 +3,53 @@ import SwiftUI
 struct PlayerView: View {
     @State private var p = Player()
     @State private var booting = true
+    @State private var resizing = false   // blur while the size switches
+
+    // Grab bar under the front screen: drag down for the taller size, up to go back; click toggles.
+    // One DragGesture handles both (a Button would also fire on drag release); window-background dragging
+    // is paused while over it so the window doesn't move instead.
+    var sizeHandle: some View {
+        Capsule().fill(.black.opacity(0.35)).frame(width: 72, height: 5)
+            .overlay(Capsule().stroke(.white.opacity(0.35), lineWidth: 0.5))
+            .frame(width: 120, height: 26)
+            .background(Color.black.opacity(0.001))   // tiny alpha: macOS passes clicks through fully clear pixels
+            .contentShape(Rectangle())
+            .onHover { h in
+                NSApp.windows.first { $0 is KeyPanel }?.isMovableByWindowBackground = !h
+                if h { NSCursor.resizeUpDown.push() } else { NSCursor.pop() }
+            }
+            .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .global).onEnded { v in
+                let dy = v.translation.height   // positive = dragged down
+                if abs(dy) < 4 { setTall(!p.tall) } else if dy > 10 { setTall(true) } else if dy < -10 { setTall(false) }
+            })
+            .accessibilityElement().accessibilityLabel("Resize").accessibilityAddTraits(.isButton)
+            .accessibilityAction { setTall(!p.tall) }
+            .help(p.tall ? "Drag up for the compact size" : "Drag down for the taller size")
+            .offset(x: margin + screenW + screenW / 2 - 60, y: -17)   // ~10pt under the body
+    }
+
+    /// Switch height; the window grows/shrinks downward, top edge stays put.
+    func setTall(_ tall: Bool) {
+        guard tall != p.tall, !resizing else { return }
+        withAnimation(.easeIn(duration: 0.18)) { resizing = true }
+        Task {
+            try? await Task.sleep(for: .seconds(0.18))
+            applySize(tall)
+            try? await Task.sleep(for: .seconds(0.05))
+            withAnimation(.easeOut(duration: 0.4)) { resizing = false }
+        }
+    }
+
+    private func applySize(_ tall: Bool) {
+        screenH = baseScreenH + (tall ? tallExtra : 0)
+        p.tall = tall
+        if let w = NSApp.windows.first(where: { $0 is KeyPanel }) {
+            var f = w.frame
+            let h = screenH + margin * 2
+            f.origin.y += f.height - h; f.size.height = h
+            w.setFrame(f, display: true)
+        }
+    }
     private let tick = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -23,6 +70,9 @@ struct PlayerView: View {
                         .offset(x: margin + screenW, y: margin)
                 }
             }
+            .overlay(alignment: .bottomLeading) { sizeHandle }
+            .id(p.tall)   // screenH is a plain global: rebuild everything when it changes
+            .environment(\.screenBlur, resizing ? 16 : 0)   // Half blurs its screen only, not the body/bezel
             .frame(width: screenW * 2 + margin * 2, height: screenH + margin * 2)
             .task { await p.run() }
 
@@ -46,6 +96,11 @@ func halfShape(right: Bool, radius: CGFloat, hinge: CGFloat = 0) -> UnevenRounde
                                    bottomTrailingRadius: radius, topTrailingRadius: radius, style: .continuous)
           : UnevenRoundedRectangle(topLeadingRadius: radius, bottomLeadingRadius: radius,
                                    bottomTrailingRadius: 0, topTrailingRadius: 0, style: .continuous)
+}
+
+private struct ScreenBlurKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+extension EnvironmentValues {
+    var screenBlur: CGFloat { get { self[ScreenBlurKey.self] } set { self[ScreenBlurKey.self] = newValue } }
 }
 
 // Wallpaper spans the whole inner screen; each half shows its slice.
@@ -84,6 +139,7 @@ struct Half<Content: View>: View {
     @ViewBuilder let content: Content
 
     var hingeR: CGFloat { hingeRadius * (hingeBezel ?? 0) }
+    @Environment(\.screenBlur) private var screenBlur
 
     var body: some View {
         let w = screenW - bezel, h = screenH - bezel * 2
@@ -97,6 +153,7 @@ struct Half<Content: View>: View {
             content.padding(right ? .leading : .trailing, hingeBezel == nil ? 0 : bezel)
         }
         .frame(width: w, height: h)
+        .blur(radius: screenBlur)   // resize blur; clipped to the screen below
         .overlay(alignment: right ? .leading : .trailing) {
             if let b = hingeBezel { Rectangle().fill(.black).frame(width: bezel).opacity(b).allowsHitTesting(false) }
         }
@@ -123,7 +180,8 @@ struct Device: View, Animatable {
     var t: Double
     nonisolated var animatableData: Double { get { t } set { t = newValue } }
 
-    static let fullW = screenW * 2 + margin * 2, fullH = screenH + margin * 2
+    static let fullW = screenW * 2 + margin * 2
+    static var fullH: CGFloat { screenH + margin * 2 }
 
     var body: some View {
         let hinge = margin + screenW
@@ -256,21 +314,34 @@ struct NowPlaying: View {
                 } else if let track = p.track {
                     VStack(alignment: .leading, spacing: 10) {
                         ZStack { art(track).id(track.id).transition(.blurReplace) }
-                        if !p.fullArt {
+                        if !p.fullArt || p.tall {   // tall size has room for the title under the full cover
                             ZStack(alignment: .leading) {
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(track.title).font(.system(size: 17, weight: .semibold))
-                                    Text(track.artist).font(.system(size: 13)).foregroundStyle(.white.opacity(0.65))
+                                Button { withAnimation(.smooth(duration: 0.4)) { p.openContext() } } label: {   // tracks of this album/playlist
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(track.title).font(.system(size: 17, weight: .semibold))
+                                        Text(track.artist).font(.system(size: 13)).foregroundStyle(.white.opacity(0.65))
+                                    }
+                                    .lineLimit(1)
+                                    .contentShape(Rectangle())
                                 }
-                                .lineLimit(1)
+                                .buttonStyle(.plain)
+                                .help("Show \(p.contextURI?.contains(":playlist:") == true ? "playlist" : "album")")
                                 .id(track.id).transition(.blurReplace)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if !p.fullArt {
                             Spacer(minLength: 0)
                             do {   // always laid out so track changes (lyrics reset, then reload) never resize the cover/title
                                 // Hidden while full lyrics are on the left: fades with the fold itself (t), so every copy agrees.
                                 let shown = p.lyrics.isEmpty ? 0 : p.showLyrics ? 1 - smoothstep(t * 2) : 1
-                                strip.blur(radius: 10 * (1 - shown)).opacity(shown)
+                                Button { withAnimation(.smooth(duration: 0.4)) { p.showLyrics = true; p.open = true } } label: {   // strip → full lyrics on the left
+                                    strip.contentShape(RoundedRectangle(cornerRadius: 14))
+                                }
+                                .buttonStyle(.plain)
+                                .allowsHitTesting(shown > 0.5)
+                                .help("Show lyrics")
+                                .blur(radius: 10 * (1 - shown)).opacity(shown)
                                     .animation(.smooth(duration: 0.6), value: p.lyrics.isEmpty)
                                     .animation(.smooth(duration: 0.45), value: p.showLyrics)
                             }   // full lyrics on the left: hide strip but keep its space
@@ -334,6 +405,14 @@ struct NowPlaying: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    // Full cover fills the column (screen minus padding, button rail and gaps), capped by the height
+    // left over (tall size keeps room for the title below).
+    var artSize: CGFloat {
+        guard p.fullArt else { return p.tall ? 100 : 90 }   // normal size: 100 overflows the column by a few points
+        let w = screenW - bezel - 18 - 8 - 42 - 8
+        return min(w, screenH - bezel * 2 - 28 - (p.tall ? 52 : 0))
+    }
+
     func art(_ track: Track) -> some View {
         Button { withAnimation(.smooth(duration: 0.5)) { p.fullArt.toggle() } } label: {
             Color.clear.aspectRatio(1, contentMode: .fit)
@@ -341,13 +420,13 @@ struct NowPlaying: View {
                 .clipShape(RoundedRectangle(cornerRadius: p.fullArt ? 22 : 16, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
                     Image(systemName: p.fullArt ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .contentTransition(.symbolEffect(.replace))
                         .font(.system(size: 10, weight: .bold))
                         .frame(width: 22, height: 22)
                         .background(.black.opacity(0.3), in: Circle())
                         .padding(6)
                 }
-                .aspectRatio(1, contentMode: .fit)
-                .frame(maxWidth: p.fullArt ? .infinity : 100)
+                .frame(width: artSize, height: artSize)   // explicit size so the grow/shrink animates (maxWidth: .infinity can't)
                 .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
                 .contentShape(RoundedRectangle(cornerRadius: 16))
         }
@@ -367,7 +446,6 @@ struct NowPlaying: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10).padding(.vertical, 7)
         .background(.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .allowsHitTesting(false)
     }
 
     var seekBar: some View {
@@ -450,12 +528,13 @@ struct LeftScreen: View {
     let p: Player
     var tab: String { p.tab }
     @State private var forward = true   // slide direction: new tab is to the right of the old one
-    static let order = ["Albums", "Playlists", "Up next", "Profile"]
+    static let order = ["Albums", "Playlists", "Up next", "Profile", "Context"]
     func go(_ t: String) {
         forward = Self.order.firstIndex(of: t)! > Self.order.firstIndex(of: tab)!
         withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) { p.tab = t }   // swipe feel
     }
     @Namespace private var tabNS
+    @State private var contextScroll: Int?   // row id (offset) the context list is scrolled to
 
     var body: some View {
         ZStack {
@@ -467,6 +546,27 @@ struct LeftScreen: View {
     // Albums / Playlists / Up next, switched by a segmented tab bar.
     var library: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if tab == "Context" {
+                // Opened from the title: back button + album/playlist name instead of the tabs.
+                HStack(spacing: 10) {
+                    Button { go(p.contextBack) } label: {
+                        Image(systemName: "chevron.left").font(.system(size: 12, weight: .bold))
+                            .frame(width: 30, height: 30)
+                            .background(.white.opacity(0.16), in: Circle())
+                            .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 0.5))
+                            .foregroundStyle(.white).contentShape(Circle())
+                    }
+                    .buttonStyle(.plain).help("Back")
+                    VStack(alignment: .leading, spacing: 0) {
+                        Text(p.listURI?.contains(":playlist:") == true ? "PLAYLIST" : "ALBUM")
+                            .font(.system(size: 9, weight: .bold)).foregroundStyle(.white.opacity(0.5))
+                        Text(p.contextName.isEmpty ? "Loading…" : p.contextName)
+                            .font(.system(size: 14, weight: .bold)).foregroundStyle(.white).lineLimit(1)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .transition(.blurReplace)
+            } else {
             HStack(spacing: 8) {
             // Glass pill tabs, same look as the round glass buttons.
             HStack(spacing: 2) {
@@ -496,23 +596,32 @@ struct LeftScreen: View {
             .buttonStyle(.plain)
             .help("Profile")
             }
+            .transition(.blurReplace)
+            }
             ZStack {
             Group {
             if tab == "Profile" { ScrollView { profile }.modifier(GlassScroller(autoHide: true)) } else {
             GeometryReader { g in
                 // Tile sized so a 4×3 block (12 covers) fits the visible area exactly.
-                let tile = min((g.size.width - 18 - 24) / 4, (g.size.height - 16) / 3)
+                let rows: CGFloat = p.tall ? 4 : 3
+                let tile = min((g.size.width - 18 - 24) / 4, (g.size.height - 8 * (rows - 1)) / rows)
                 ScrollView {
                     switch tab {
                     case "Albums": grid(p.albums, tile)
                     case "Playlists": grid(p.playlists, tile)
-                    default: upNext
+                    case "Context": contextList(listRowH(g.size.height))
+                    default: upNext(listRowH(g.size.height))
                     }
                 }
-                .frame(height: tab == "Up next" ? ((g.size.height + 6) / 38).rounded(.down) * 38 - 6 : tile * 3 + 16)   // whole rows only (grid: 3; up next: 32pt rows + 6 gap), no peeking
+                .scrollPosition(id: $contextScroll, anchor: .top)
+                .onChange(of: p.contextTracks.count) {   // list loaded: start at the song that's playing
+                    contextScroll = p.contextTracks.firstIndex { $0.id == p.track?.id } ?? 0
+                }
+                .frame(height: listHeight(g.size.height, tile: tile, rows: rows))
                 .padding(.trailing, 18)
                 .modifier(GlassScroller())
-                .frame(width: g.size.width, height: g.size.height, alignment: .bottom)   // spare space on top: bottom lines up with the right screen
+                .padding(.top, tab == "Context" || tab == "Up next" ? listTop : 0)   // song lists start level with the grid; leftover (< 1 row) goes below
+                .frame(width: g.size.width, height: g.size.height, alignment: tab == "Context" || tab == "Up next" ? .top : .bottom)
             }
             .padding(.bottom, 6)
             }
@@ -554,7 +663,7 @@ struct LeftScreen: View {
                 if let note = p.topArtistsNote {
                     Text(note).font(.system(size: 11)).foregroundStyle(.white.opacity(0.55))
                 }
-                ForEach(Array(p.topArtists.enumerated()), id: \.offset) { i, a in
+                ForEach(Array(p.topArtists.prefix(p.tall ? 3 : 2).enumerated()), id: \.offset) { i, a in   // what fits without scrolling
                     Button { p.play(a) } label: {
                         HStack(spacing: 10) {
                             Text("\(i + 1)").font(.system(size: 12, weight: .bold).monospacedDigit())
@@ -576,13 +685,31 @@ struct LeftScreen: View {
         .padding(.top, 4).padding(.trailing, 12)
     }
 
-    // Mosaic: a 2×2 cover with four small ones beside it (side alternates), then a plain row of four; repeat.
+    // Whole rows only, no half-cut row peeking at the bottom (song lists: see listRowH);
+    // the album/playlist grid shows `rows` rows of tiles (3, or 4 at the tall size).
+    let listTop: CGFloat = 12   // song lists start where the album grid starts under the tabs
+
+    func listHeight(_ h: CGFloat, tile: CGFloat, rows: CGFloat) -> CGFloat {
+        tab == "Context" || tab == "Up next" ? h - listTop : tile * rows + 8 * (rows - 1)
+    }
+
+    // Song lists fill the same area as the grid (top and bottom edges match) with a fixed 4pt gap:
+    // the nearest whole number of ~36pt rows, each row stretched/squeezed a few points to fit exactly
+    // (normal size: 5 rows of ~34pt, tall: 6 of ~38pt).
+    func listRowH(_ h: CGFloat) -> CGFloat {
+        let avail = h - listTop, n = max(1, ((avail + 4) / 40).rounded())
+        return (avail - (n - 1) * 4) / n
+    }
+
+    // Mosaic: a 2×2 cover with four small ones beside it (side alternates), then plain rows of four; repeat.
     func grid(_ items: [Album], _ tile: CGFloat) -> some View {
-        var blocks: [(big: Bool, items: ArraySlice<Album>)] = []
+        // Cycle fills the view exactly: big (2 rows) + 1 plain row, or + 2 plain rows when tall.
+        let cycle = p.tall ? 3 : 2
+        var blocks: [(big: Bool, left: Bool, items: ArraySlice<Album>)] = []
         var i = 0
         while i < items.count {
-            let big = blocks.count % 2 == 0, n = big ? 5 : 4
-            blocks.append((big, items[i..<min(i + n, items.count)])); i += n
+            let big = blocks.count % cycle == 0, n = big ? 5 : 4
+            blocks.append((big, (blocks.count / cycle) % 2 == 0, items[i..<min(i + n, items.count)])); i += n
         }
         return LazyVStack(spacing: 8) {
             ForEach(blocks.indices, id: \.self) { b in
@@ -600,7 +727,7 @@ struct LeftScreen: View {
                                 }
                             }
                         }
-                        if b % 4 == 0 { big; small } else { small; big }
+                        if blocks[b].left { big; small } else { small; big }
                     }
                 } else {
                     HStack(spacing: 8) {
@@ -614,14 +741,33 @@ struct LeftScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    var upNext: some View {
-        VStack(spacing: 6) {
+    // Tracks of the album/playlist now playing (opened by tapping the title); current song highlighted.
+    func contextList(_ rowH: CGFloat) -> some View {
+        LazyVStack(spacing: 4) {
+            ForEach(Array(p.contextTracks.enumerated()), id: \.offset) { _, t in
+                Button { p.play(t, inContext: p.listURI) } label: {
+                    row(t).padding(.horizontal, 8).frame(height: rowH)   // every row padded alike; current one gets a pill
+                        .background(t.id == p.track?.id ? Color.white.opacity(0.14) : .clear,
+                                    in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .contextMenu {
+                    Button("Play Now") { p.play(t, inContext: p.listURI) }
+                }
+            }
+        }
+        .scrollTargetLayout()
+    }
+
+    func upNext(_ rowH: CGFloat) -> some View {
+        VStack(spacing: 4) {
             if p.queue.isEmpty {
                 Text("Nothing queued").font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 8)
             }
             ForEach(Array(p.queue.enumerated()), id: \.offset) { _, t in
-                Button { p.skip(to: t) } label: { row(t) }.buttonStyle(.plain)
+                Button { p.skip(to: t) } label: { row(t).padding(.horizontal, 8).frame(height: rowH) }   // same rows as the album list
+                    .buttonStyle(.plain)
             }
         }
     }
@@ -886,8 +1032,11 @@ struct LoginRipple: View {
         }
         .frame(width: screenW, height: screenH)
         .opacity(shown ? 1 : 0).blur(radius: shown ? 0 : 14)
-        .task(id: trigger) {
-            guard trigger > 0 else { return }
+        .onChange(of: trigger) { play() }   // only on a new login; .task would replay whenever the view is rebuilt (resize)
+    }
+
+    func play() {
+        Task {
             grow = 0; shown = true
             withAnimation(.timingCurve(0.5, 0, 0.2, 1, duration: 0.9)) { grow = 1 }
             try? await Task.sleep(for: .seconds(0.9))

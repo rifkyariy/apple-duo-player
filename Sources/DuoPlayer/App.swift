@@ -2,7 +2,10 @@ import SwiftUI
 import AppKit
 
 let screenW: CGFloat = 300
-let screenH: CGFloat = 280
+let baseScreenH: CGFloat = 280
+let tallExtra: CGFloat = 64       // one more album row (tile + gap): the taller, more Duo-like size
+// ponytail: mutable global read by every view; set only via PlayerView.setTall, which also rebuilds the views.
+nonisolated(unsafe) var screenH: CGFloat = baseScreenH
 let margin: CGFloat = 40
 
 @main
