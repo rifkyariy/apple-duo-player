@@ -1,3 +1,4 @@
+import os
 import Foundation
 import AppKit
 import Network
@@ -5,6 +6,8 @@ import CryptoKit
 
 // Spotify Web API client. Auth is Authorization Code + PKCE: no client secret, no server.
 // The refresh token lives in the Keychain; the access token only in memory.
+private let log = Logger(subsystem: "DuoPlayer", category: "spotify")
+
 @MainActor final class Spotify {
     // Loopback redirect: Spotify always accepts it for desktop apps. Add it to the app's Redirect URIs.
     static let port: NWEndpoint.Port = 8898
@@ -12,7 +15,7 @@ import CryptoKit
     static let scopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read user-library-modify playlist-read-private user-top-read"
 
     // Client IDs are public (PKCE needs no secret). SPOTIFY_CLIENT_ID overrides it for a different app.
-    let clientID = ProcessInfo.processInfo.environment["SPOTIFY_CLIENT_ID"] ?? "65d4ea2285b047059f3b7bb393e3d212"
+    let clientID = ProcessInfo.processInfo.environment["SPOTIFY_CLIENT_ID"] ?? "404cfd2ae3184631a5726ee19b015cfe"
 
     private var accessToken: String?
     private var expiry = Date.distantPast
@@ -147,6 +150,11 @@ import CryptoKit
         }
         let (data, resp) = try await URLSession.shared.data(for: req)
         let http = resp as! HTTPURLResponse
+        if http.statusCode >= 400 {   // path + status only (never the token); read with: log show --predicate 'subsystem == "DuoPlayer"'
+            // Plus any X-RateLimit-* headers, when Spotify sends them (most endpoints don't).
+            let limits = http.allHeaderFields.compactMap { k, v in (k as? String)?.lowercased().hasPrefix("x-ratelimit") == true ? "\(k)=\(v)" : nil }.joined(separator: " ")
+            log.error("\(method, privacy: .public) \(path, privacy: .public) -> \(http.statusCode) retry-after=\(http.value(forHTTPHeaderField: "Retry-After") ?? "-", privacy: .public) \(limits, privacy: .public)")
+        }
         switch http.statusCode {
         case 204: return nil
         case 200..<300: return data
@@ -164,15 +172,24 @@ import CryptoKit
         }
     }
 
-    func get<T: Decodable>(_ path: String, query: [String: String] = [:]) async throws -> T? {
+    /// cacheFor > 0 answers repeats from memory for that many seconds: /me/* endpoints get 429s after only
+    /// a handful of calls, so anything that rarely changes shouldn't be re-asked.
+    func get<T: Decodable>(_ path: String, query: [String: String] = [:], cacheFor: TimeInterval = 0) async throws -> T? {
+        let key = path + "?" + query.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
+        if cacheFor > 0, let hit = cache[key], hit.until > Date() { return try JSONDecoder().decode(T.self, from: hit.data) }
         guard let data = try await call("GET", path, query: query) else { return nil }
+        if cacheFor > 0 { cache[key] = (Date() + cacheFor, data) }
         return try JSONDecoder().decode(T.self, from: data)
     }
+
+    /// Drops cached answers for a path (after a change we made, e.g. liking a song).
+    func forget(_ path: String) { cache = cache.filter { !$0.key.hasPrefix(path + "?") } }
+    private var cache: [String: (until: Date, data: Data)] = [:]   // ponytail: in-memory, unbounded; entries are small and few
 }
 
 // MARK: - Response shapes (only the fields we use)
 
-struct SPImage: Decodable { let url: URL }
+struct SPImage: Codable { let url: URL }
 struct SPNamed: Decodable { let name: String }
 struct SPAlbum: Decodable { let name: String; let uri: String; let images: [SPImage] }
 struct SPTrack: Decodable { let id: String; let name: String; let duration_ms: Int; let artists: [SPNamed]; let album: SPAlbum }
@@ -191,7 +208,7 @@ struct SPPlaylistFull: Decodable {
 }
 struct SPSavedAlbums: Decodable { struct Item: Decodable { let album: SPAlbum }; let items: [Item] }
 struct SPPlaylists: Decodable { struct Item: Decodable { let name: String; let uri: String; let images: [SPImage]? }; let items: [Item?] }
-struct SPMe: Decodable { struct F: Decodable { let total: Int }; let display_name: String?; let images: [SPImage]?; let followers: F? }
+struct SPMe: Codable { struct F: Codable { let total: Int }; let display_name: String?; let images: [SPImage]?; let followers: F? }
 struct SPTopArtists: Decodable { struct A: Decodable { let name: String; let uri: String; let images: [SPImage]? }; let items: [A] }
 struct SPDevices: Decodable { let devices: [SPDevice] }
 struct SPQueue: Decodable { let queue: [SPTrack] }

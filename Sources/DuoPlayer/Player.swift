@@ -13,18 +13,34 @@ extension Track {
     }
 }
 
-struct Album: Identifiable {
+struct Album: Identifiable, Codable {
     let uri: String, name: String, art: URL?
     var id: String { uri }
 }
 
-// App state. Spotify is the source of truth; we poll it every second and
+// Library/profile saved to disk: shown instantly on launch, refreshed from Spotify only when stale,
+// so relaunches don't re-request everything (that got us rate limited).
+struct LibraryCache: Codable {
+    var albums: [Album], playlists: [Album], topArtists: [Album], me: SPMe?, savedAt: Date
+    static let url = URL.cachesDirectory.appending(path: "DuoPlayer/library.json")
+    static let maxAge: TimeInterval = 6 * 3600
+
+    static func load(from url: URL = url) -> LibraryCache? { (try? Data(contentsOf: url)).flatMap { try? JSONDecoder().decode(Self.self, from: $0) } }
+    func save(to url: URL = url) {
+        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? JSONEncoder().encode(self).write(to: url)
+    }
+    static func clear() { try? FileManager.default.removeItem(at: url) }
+}
+
+// App state. Spotify is the source of truth; we poll it sparingly (see pollInterval) and
 // interpolate progress locally in between so the bar and lyrics move smoothly.
 @MainActor @Observable final class Player {
     let spotify = Spotify()
 
     var signedIn = false
     var message: String?            // shown on the cover: no device, errors
+    var rateLimitedUntil: Date?     // Spotify said 429: the cover shows a countdown until the next try
     var track: Track?
     var playing = false
     var progress = 0.0
@@ -40,7 +56,7 @@ struct Album: Identifiable {
     private var rawQueue: [Track] = []   // Spotify's real queue, repeats kept: skip(to:) counts "next" presses in this
     var devices: [SPDevice] = []
 
-    var open = false
+    var open = false { didSet { refreshQueueIfShown() } }
     var contextURI: String?         // what's playing from: playlist/album (Spotify context), else the track's album
     var contextName = ""
     var listURI: String?            // what the open list shows (the poll keeps rewriting contextURI)
@@ -50,8 +66,8 @@ struct Album: Identifiable {
     var tall = false                // extra album row of height; default is the normal size
     var logins = 0
     var loggingIn = false           // sign-in button shows a spinner
-    var tab = "Albums"              // left screen tab (here, not @State, so fold copies match)
-    var showLyrics = false          // left screen: full lyrics instead of albums
+    var tab = "Albums" { didSet { refreshQueueIfShown() } }   // left screen tab (here, not @State, so fold copies match)
+    var showLyrics = false { didSet { refreshQueueIfShown() } }   // left screen: full lyrics instead of albums
     var fullArt = false             // first screen: album cover only
     var seeking = false             // user is dragging the seek bar; don't let polls fight it
 
@@ -67,13 +83,80 @@ struct Album: Identifiable {
 
     func run() async {
         signedIn = spotify.signedIn
-        while !Task.isCancelled {
-            var wait = 1.0
-            if signedIn {
-                do { try await poll() } catch { wait = handle(error) }
-            }
-            try? await Task.sleep(for: .seconds(wait))
+        if signedIn, let c = LibraryCache.load() {
+            albums = c.albums; playlists = c.playlists; topArtists = c.topArtists; me = c.me; librarySavedAt = c.savedAt
         }
+        watchScreenSleep()
+        while !Task.isCancelled {
+            // A Retry-After from before (e.g. SwiftUI restarted this task) still holds: no request until it passes.
+            if let until = rateLimitedUntil { await nap(until: until) }
+            if Task.isCancelled { break }
+            // Screen asleep or locked: nobody is looking, so don't ask Spotify at all until it wakes.
+            if screenAsleep { await nap(until: Date() + 5); continue }
+            var wait = pollInterval
+            if signedIn {
+                defer { retrying = false }
+                do {
+                    try await poll()
+                    if rateLimitedUntil != nil { withAnimation(.smooth(duration: 1)) { rateLimitedUntil = nil } }
+                    wait = pollInterval   // from the fresh state (song position, playing/paused)
+                } catch { wait = handle(error) }
+            }
+            if rateLimitedUntil == nil { await nap(until: Date() + wait) }
+        }
+    }
+
+    // Spotify counts calls per rolling 30s window, so "now playing" is polled sparingly and the app fakes
+    // the live feel: progress/lyrics tick locally, buttons update at once, and we poll exactly when it matters.
+    private var pollInterval: Double {
+        Self.pollInterval(hasTrack: track != nil, playing: playing, remaining: duration - progress)
+    }
+
+    nonisolated static func pollInterval(hasTrack: Bool, playing: Bool, remaining: Double) -> Double {
+        guard hasTrack else { return 10 }              // nothing playing: "Open Spotify on a device"
+        guard playing else { return 30 }               // paused: only another device can change anything
+        return max(1, min(10, remaining + 0.8))        // poll right as the song should end, so the next one shows on time
+    }
+
+    /// Poll about a second after a playback action (play, skip, seek…) to confirm what Spotify did.
+    private func pollSoon() { pollAt = Date() + 1 }
+    private var pollAt: Date?
+
+    private var screenAsleep = false
+    private func watchScreenSleep() {
+        let ws = NSWorkspace.shared.notificationCenter, dist = DistributedNotificationCenter.default()
+        let events: [(NotificationCenter, Notification.Name, Bool)] = [
+            (ws, NSWorkspace.screensDidSleepNotification, true), (ws, NSWorkspace.screensDidWakeNotification, false),
+            (dist, Notification.Name("com.apple.screenIsLocked"), true), (dist, Notification.Name("com.apple.screenIsUnlocked"), false)]
+        for (center, name, asleep) in events {
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.screenAsleep = asleep
+                    if !asleep { self?.retryRequested = true }   // woke up: refresh now
+                }
+            }
+        }
+    }
+
+    /// Sleeps in short steps so the retry button, a playback action (pollSoon) or waking the screen can cut it short.
+    /// Stops on cancellation too: Task.sleep throws at once then, so without the check this would spin.
+    private func nap(until: Date) async {
+        while !Task.isCancelled && !retryRequested {
+            if Date() >= min(until, pollAt ?? until) { break }
+            try? await Task.sleep(for: .seconds(0.25))
+        }
+        retryRequested = false
+        pollAt = nil
+    }
+
+    private var retryRequested = false
+    var retrying = false   // retry button spins until Spotify answers
+
+    /// Rate-limit screen's retry button: poll once now instead of waiting out Retry-After.
+    func retryNow() {
+        guard !retrying else { return }
+        retrying = true
+        retryRequested = true
     }
 
     // Button spins while we authorize and load everything (song, cover, library) behind the sign-in screen;
@@ -102,6 +185,7 @@ struct Album: Identifiable {
         Task {
             if wasOpen { try? await Task.sleep(for: .seconds(2.8)) }   // fold duration
             spotify.logout()
+            LibraryCache.clear(); librarySavedAt = .distantPast
             withAnimation(.smooth(duration: 0.6)) {
                 signedIn = false
                 track = nil; me = nil; topArtists = []; topArtistsNote = nil   // refetched after the next sign-in (picks up new scopes)
@@ -110,6 +194,7 @@ struct Album: Identifiable {
     }
 
     private var libraryRetry = Date.distantPast
+    private var librarySavedAt = Date.distantPast
 
     private func poll() async throws {
         guard let s: SPPlayback = try await spotify.get("/me/player"), let item = s.item else {
@@ -125,26 +210,39 @@ struct Album: Identifiable {
         albumURI = item.album.uri
         contextURI = s.context.map(\.uri).flatMap { $0.contains(":playlist:") || $0.contains(":album:") ? $0 : nil } ?? item.album.uri
         if item.id != track?.id { await trackChanged(item) }
-        // Library/profile: at most once a minute until loaded. Retrying every poll kept Spotify rate limiting (429) us.
-        if Date() >= libraryRetry, albums.isEmpty || me == nil || playlists.isEmpty || (topArtists.isEmpty && topArtistsNote == nil) {
+        // Library/profile: fetched only when missing or the saved copy is stale, and at most once a minute
+        // (retrying every poll kept Spotify rate limiting us). Failures keep what's already shown.
+        let stale = Date() > librarySavedAt + LibraryCache.maxAge
+        if Date() >= libraryRetry, stale || albums.isEmpty || me == nil || playlists.isEmpty || (topArtists.isEmpty && topArtistsNote == nil) {
             libraryRetry = Date() + 60
-            if albums.isEmpty { albums = (try? await loadAlbums()) ?? [] }
-            if me == nil { me = try? await spotify.get("/me") }
-            if topArtists.isEmpty && topArtistsNote == nil {
+            var ok = true
+            if stale || albums.isEmpty {
+                if let a = try? await loadAlbums() { albums = a } else { ok = false }
+            }
+            if stale || me == nil {
+                if let m: SPMe = try? await spotify.get("/me") { me = m } else { ok = false }
+            }
+            if stale || (topArtists.isEmpty && topArtistsNote == nil) {
                 // Try recent, then all-time: new accounts often have nothing for one of the ranges.
                 do {
-                    for range in ["medium_term", "short_term", "long_term"] where topArtists.isEmpty {
+                    var found: [Album] = []
+                    for range in ["medium_term", "short_term", "long_term"] where found.isEmpty {
                         let r: SPTopArtists? = try await spotify.get("/me/top/artists", query: ["limit": "4", "time_range": range])
-                        topArtists = r?.items.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } ?? []
+                        found = r?.items.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } ?? []
                     }
-                    if topArtists.isEmpty { topArtistsNote = "Not enough listening history yet" }
+                    if found.isEmpty { topArtistsNote = "Not enough listening history yet" } else { topArtists = found }
                 } catch let e as Spotify.Failure where e.status == 403 || e.status == 401 {
                     topArtistsNote = "Sign out and sign in again to see top artists"   // old login lacks user-top-read
-                } catch {}
+                } catch { ok = false }
             }
-            if playlists.isEmpty {
-                let r: SPPlaylists? = try? await spotify.get("/me/playlists", query: ["limit": "50"])
-                playlists = r?.items.compactMap { $0.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } } ?? []
+            if stale || playlists.isEmpty {
+                if let r: SPPlaylists = try? await spotify.get("/me/playlists", query: ["limit": "50"]) {
+                    playlists = r.items.compactMap { $0.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } }
+                } else { ok = false }
+            }
+            if ok {
+                librarySavedAt = Date()
+                LibraryCache(albums: albums, playlists: playlists, topArtists: topArtists, me: me, savedAt: librarySavedAt).save()
             }
         }
     }
@@ -152,9 +250,9 @@ struct Album: Identifiable {
     private func trackChanged(_ item: SPTrack) async {
         let t = Track(item)
         track = t
-        await loadQueue()   // Spotify repeats the queue on loop/repeat; shown once each
+        queueStale = true; refreshQueueIfShown()   // only fetched while Up next is on screen
         lyrics = []
-        let liked: [Bool]? = try? await spotify.get("/me/tracks/contains", query: ["ids": t.id])
+        let liked: [Bool]? = try? await spotify.get("/me/tracks/contains", query: ["ids": t.id], cacheFor: 3600)
         self.liked = liked?.first ?? false
         if let art = t.art, let c = await averageColor(art) { withAnimation(.smooth(duration: 1)) { color = c } }
         let lines = await Lyrics.fetch(title: t.title, artist: item.artists.first?.name ?? "", album: t.album, duration: t.duration)
@@ -168,7 +266,7 @@ struct Album: Identifiable {
     }
 
     private func loadDevices() async throws -> [SPDevice] {
-        let r: SPDevices? = try await spotify.get("/me/player/devices")
+        let r: SPDevices? = try await spotify.get("/me/player/devices", cacheFor: 300)
         return r?.devices ?? []
     }
 
@@ -176,6 +274,10 @@ struct Album: Identifiable {
     private func handle(_ error: Error) -> Double {
         guard let f = error as? Spotify.Failure else { message = error.localizedDescription; return 3 }
         if f.status == 401 { signedIn = spotify.signedIn }
+        withAnimation(.smooth(duration: 1)) {   // wallpaper cross-fades to/from the green waiting screen
+            rateLimitedUntil = f.status == 429 ? Date() + max(f.retryAfter, 1) : nil
+            if rateLimitedUntil != nil { open = false }
+        }   // albums/lyrics are disabled while limited: fold the book shut
         message = f.status == 403 ? "Spotify Premium is required for playback control" : f.message
         return max(f.retryAfter, 1)
     }
@@ -184,8 +286,19 @@ struct Album: Identifiable {
 
     private func send(_ method: String, _ path: String, query: [String: String] = [:], body: [String: Any]? = nil) {
         Task {
-            do { try await spotify.call(method, path, query: query, body: body) } catch { _ = handle(error) }
+            do {
+                try await spotify.call(method, path, query: query, body: body)
+                if path.hasPrefix("/me/player") { pollSoon() }   // confirm the new state; likes etc. don't change playback
+            } catch { _ = handle(error) }
         }
+    }
+
+    // The queue changes with every song but is only seen on the Up next tab: fetch it when it's shown, not per song.
+    private var queueStale = true
+    private func refreshQueueIfShown() {
+        guard queueStale, open, tab == "Up next", !showLyrics, rateLimitedUntil == nil else { return }
+        queueStale = false
+        Task { await loadQueue() }
     }
 
     /// Reads Spotify's queue into rawQueue (real order) and queue (shown, repeats removed).
@@ -193,6 +306,7 @@ struct Album: Identifiable {
     func loadQueue() async -> [Track] {
         let q: SPQueue? = try? await spotify.get("/me/player/queue")
         setQueue(q?.queue.map(Track.init) ?? [])
+        queueStale = false
         return rawQueue
     }
 
@@ -217,7 +331,7 @@ struct Album: Identifiable {
         Task {
             // Count "next" presses in Spotify's real queue, read fresh (the shown list drops repeats and may be ahead of Spotify).
             guard let i = await loadQueue().firstIndex(where: { $0.id == t.id }) else { return }
-            do { for _ in 0...i { try await spotify.call("POST", "/me/player/next") } } catch { _ = handle(error) }
+            do { for _ in 0...i { try await spotify.call("POST", "/me/player/next") }; pollSoon() } catch { _ = handle(error) }
         }
     }
 
@@ -238,7 +352,7 @@ struct Album: Identifiable {
         tab = "Context"; showLyrics = false; open = true
         contextName = ""; contextTracks = []; listURI = uri
         Task {
-            if uri.contains(":playlist:"), let r: SPPlaylistFull = try? await spotify.get("/playlists/\(id)") {
+            if uri.contains(":playlist:"), let r: SPPlaylistFull = try? await spotify.get("/playlists/\(id)", cacheFor: 3600) {
                 contextName = r.name
                 contextTracks = r.tracks.items.compactMap { $0.track.map(Track.init) }
                 return
@@ -247,12 +361,16 @@ struct Album: Identifiable {
             let albumURI = uri.contains(":album:") ? uri : (self.albumURI ?? uri)
             listURI = albumURI
             let albumID = String(albumURI.split(separator: ":").last ?? "")
-            if let a: SPAlbumFull = try? await spotify.get("/albums/\(albumID)") {
+            if let a: SPAlbumFull = try? await spotify.get("/albums/\(albumID)", cacheFor: 3600) {
                 contextName = a.name
                 contextTracks = a.tracks.items.map {
                     Track(id: $0.id, title: $0.name, artist: $0.artists.map(\.name).joined(separator: ", "), album: a.name,
                           art: a.images.first?.url, duration: Double($0.duration_ms) / 1000)
                 }
+            } else if let t = track {
+                // Placeholder until Spotify answers again: the song we already know, instead of an empty error.
+                contextName = t.album
+                contextTracks = [t]
             } else { contextName = "Couldn't load this list" }
         }
     }
@@ -268,11 +386,13 @@ struct Album: Identifiable {
     func toggleLike() {
         guard let id = track?.id else { return }
         liked.toggle()
+        spotify.forget("/me/tracks/contains")
         send(liked ? "PUT" : "DELETE", "/me/tracks", query: ["ids": id])
     }
 
     func transfer(to device: SPDevice) {
         guard let id = device.id else { return }
+        spotify.forget("/me/player/devices")   // the ✓ moves to the new device
         send("PUT", "/me/player", body: ["device_ids": [id], "play": true])
     }
 }

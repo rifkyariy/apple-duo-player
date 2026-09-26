@@ -104,12 +104,19 @@ extension EnvironmentValues {
 }
 
 // Wallpaper spans the whole inner screen; each half shows its slice.
+let loginGlows = [Color(red: 0.11, green: 0.73, blue: 0.33).opacity(0.35), Color(red: 0.3, green: 0.5, blue: 1).opacity(0.2)]
+let loginColor = Color(red: 0.03, green: 0.04, blue: 0.05)   // sign-in: near black, the green/blue waves carry the color
+// Rate limited: dim green waves on a near-black green base, so "waiting" reads calmer than sign-in.
+let limitGlows = [Color(red: 0.11, green: 0.73, blue: 0.33).opacity(0.22), Color(red: 0.05, green: 0.45, blue: 0.3).opacity(0.2)]
+let limitColor = Color(red: 0.01, green: 0.08, blue: 0.04)
+
 struct Wallpaper: View {
     let color: Color
-    var wave = false   // sign-in screen: the glow blobs drift in slow blurred waves
+    var wave = false   // sign-in / rate-limited screens: the glow blobs drift in slow blurred waves
+    var glows = loginGlows   // the two extra blobs drifting in while waving
 
     var body: some View {
-        TimelineView(.animation(paused: !wave)) { tl in
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !wave)) { tl in   // slow drift: 30fps looks the same, costs far less than 120
             let k = wave ? tl.date.timeIntervalSinceReferenceDate * 2.2 : 0   // speed
             ZStack {
                 LinearGradient(colors: [color.mix(with: .white, by: 0.15), color.mix(with: .black, by: 0.6)],
@@ -119,9 +126,9 @@ struct Wallpaper: View {
                 Circle().fill(color.mix(with: .black, by: 0.25)).frame(width: 300).blur(radius: 80)
                     .offset(x: -screenW * 0.5 + (wave ? 130 : 0) * cos(k * 0.35), y: 100 + (wave ? 90 : 0) * sin(k * 0.6))
                 if wave {
-                    Circle().fill(Color(red: 0.11, green: 0.73, blue: 0.33).opacity(0.55)).frame(width: 220).blur(radius: 60)
+                    Circle().fill(glows[0]).frame(width: 220).blur(radius: 60)
                         .offset(x: screenW * 0.5 + 140 * cos(k * 0.45), y: 30 + 110 * sin(k * 0.3))
-                    Circle().fill(Color(red: 0.3, green: 0.5, blue: 1).opacity(0.35)).frame(width: 180).blur(radius: 60)
+                    Circle().fill(glows[1]).frame(width: 180).blur(radius: 60)
                         .offset(x: screenW * 0.5 + 120 * sin(k * 0.38 + 2), y: -40 + 100 * cos(k * 0.52 + 1))
                 }
             }
@@ -133,6 +140,7 @@ struct Wallpaper: View {
 struct Half<Content: View>: View {
     let right: Bool, color: Color
     var wave = false
+    var glows = loginGlows
     // Cover only: content keeps a fixed hinge-side padding; a black bezel strip covers it when closed
     // and fades to wallpaper as the book opens, so nothing shifts during the fold.
     var hingeBezel: Double? = nil
@@ -144,7 +152,7 @@ struct Half<Content: View>: View {
     var body: some View {
         let w = screenW - bezel, h = screenH - bezel * 2
         ZStack {
-            Wallpaper(color: color, wave: wave)
+            Wallpaper(color: color, wave: wave, glows: glows)
                 .allowsHitTesting(false)
                 .frame(width: w, height: h, alignment: right ? .trailing : .leading)
                 .clipped()
@@ -188,16 +196,18 @@ struct Device: View, Animatable {
         let front = t < 0.5
         let motion = smoothstep(front ? t * 2 : (1 - t) * 2)   // 0 flat, 1 edge-on
         let quad = CoverQuad(t: t, hinge: hinge)
-        let color = p.color
+        let limited = p.rateLimitedUntil != nil
+        let color = limited ? limitColor : !p.signedIn ? loginColor : p.color
+        let wave = !p.signedIn || limited, glows = limited ? limitGlows : loginGlows
         ZStack(alignment: .topLeading) {
-            place(Half(right: true, color: color, wave: !p.signedIn, hingeBezel: 1 - smoothstep(t * 2)) { NowPlaying(p: p, t: t) }, x: hinge)
+            place(Half(right: true, color: color, wave: wave, glows: glows, hingeBezel: 1 - smoothstep(t * 2)) { NowPlaying(p: p, t: t) }, x: hinge)
             if t > 0.001 && t < 0.999 {
                 CoverEdge(t: t, hinge: hinge).allowsHitTesting(false)
                 ZStack(alignment: .topLeading) {
                     Rectangle().fill(.black)   // cover body; grows with perspective past the fixed screen picture
                     if front {
                         place(FoldBlur(motion: motion, hingeAtLeading: true) {
-                            Half(right: true, color: color, wave: !p.signedIn, hingeBezel: 1 - smoothstep(t * 2)) { NowPlaying(p: p, t: t) }   // not .disabled: that dims buttons, then the real screen snaps bright
+                            Half(right: true, color: color, wave: wave, glows: glows, hingeBezel: 1 - smoothstep(t * 2)) { NowPlaying(p: p, t: t) }   // not .disabled: that dims buttons, then the real screen snaps bright
                         }, x: hinge)
                     } else {
                         place(FoldBlur(motion: motion, hingeAtLeading: false) {
@@ -290,6 +300,65 @@ struct FoldBlur<Content: View>: View {
     }
 }
 
+// Spotify rate limited us (429): an hourglass and a live countdown to the next try, instead of a bare error line.
+struct RateLimited: View {
+    let until: Date
+    let retrying: Bool
+    let retry: () -> Void
+    @State private var flip = 0.0   // hourglass turns over every few seconds
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "hourglass")
+                .font(.system(size: 30, weight: .medium))
+                .foregroundStyle(.white.opacity(0.85))
+                // A plain rotation, not .symbolEffect(.rotate): that re-laid out the whole window every frame (~13% CPU).
+                .rotationEffect(.degrees(flip))
+                .task {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(for: .seconds(2.4))
+                        withAnimation(.easeInOut(duration: 0.8)) { flip += 180 }
+                    }
+                }
+                .frame(width: 58, height: 58)
+                .background(.white.opacity(0.12), in: Circle())
+            VStack(spacing: 4) {
+                Text("Spotify needs a breather").font(.system(size: 15, weight: .bold))
+                Text("Spotify paused requests from this app.\nYour music keeps playing.")
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.65)).multilineTextAlignment(.center)
+            }
+            HStack(spacing: 6) {
+                TimelineView(.periodic(from: .now, by: 1)) { ctx in
+                    let left = max(0, Int(until.timeIntervalSince(ctx.date).rounded(.up)))
+                    // Spotify can ask for hours (seen: ~12h), so long waits read as "11h 56m".
+                    let when = left >= 3600 ? "\(left / 3600)h \(left % 3600 / 60)m" : "\(left / 60):\(String(format: "%02d", left % 60))"
+                    Text(left > 0 ? "Retrying in \(when)" : "Retrying…")
+                        .font(.system(size: 11, weight: .semibold).monospacedDigit())
+                        .contentTransition(.numericText(countsDown: true))
+                        .animation(.smooth, value: left)
+                        .padding(.horizontal, 12).padding(.vertical, 6)
+                        .background(.white.opacity(0.12), in: Capsule())
+                }
+                Button(action: retry) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .bold))
+                        .rotationEffect(.degrees(retrying ? 360 : 0))
+                        .animation(retrying ? .linear(duration: 0.8).repeatForever(autoreverses: false) : .default, value: retrying)
+                        .frame(width: 27, height: 27)
+                        .background(.white.opacity(0.12), in: Circle())
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .disabled(retrying)
+                .help("Try again now")
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transition(.blurReplace)
+    }
+}
+
 // MARK: - Right half: now playing + side controls
 
 struct NowPlaying: View {
@@ -352,7 +421,8 @@ struct NowPlaying: View {
                     .animation(.smooth(duration: 0.5), value: track.id)   // blur cross-fade on song change
                     .transition(.blurReplace)
                 } else {
-                    if let m = p.message { status(m, button: nil) {} }   // no "Loading…": the login ripple covers that moment
+                    if let until = p.rateLimitedUntil { RateLimited(until: until, retrying: p.retrying) { p.retryNow() } }
+                    else if let m = p.message { status(m, button: nil) {} }   // no "Loading…": the login ripple covers that moment
                     else { Color.clear }   // keeps the width so the button column stays on the edge
                 }
             }
@@ -376,12 +446,20 @@ struct NowPlaying: View {
     func status(_ text: String, button: String?, action: @escaping () -> Void) -> some View {
         VStack(spacing: 12) {
             if let button {   // sign-in screen
-                SpotifyLogo().fill(spotifyGreen).frame(width: 56, height: 56)
-                    .shadow(color: spotifyGreen.opacity(0.5), radius: 18)
-                VStack(spacing: 3) {
-                    Text("Connect Spotify").font(.system(size: 17, weight: .bold))
-                    Text("Sign in to control playback,\nsee lyrics and your library.")
-                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.65)).multilineTextAlignment(.center)
+                TimelineView(.animation) { tl in   // logo glow breathes slowly
+                    let k = (sin(tl.date.timeIntervalSinceReferenceDate * 1.6) + 1) / 2
+                    ZStack {
+                        Circle().fill(spotifyGreen.opacity(0.18 + 0.12 * k)).frame(width: 84, height: 84).blur(radius: 14)
+                        Circle().stroke(spotifyGreen.opacity(0.25 + 0.2 * k), lineWidth: 1).frame(width: 72 + 6 * k, height: 72 + 6 * k)
+                        SpotifyLogo().fill(spotifyGreen).frame(width: 54, height: 54)
+                    }
+                    .frame(width: 88, height: 88)
+                }
+                VStack(spacing: 5) {
+                    Text("Connect Spotify").font(.system(size: 18, weight: .heavy))
+                    Text("Control playback, follow the lyrics\nand browse your library.")
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                        .multilineTextAlignment(.center).lineSpacing(1.5)
                 }
                 Button(action: action) {
                     HStack(spacing: 7) {
@@ -390,13 +468,16 @@ struct NowPlaying: View {
                         Text(p.loggingIn ? "Connecting…" : button).font(.system(size: 12, weight: .bold))
                     }
                     .foregroundStyle(.black)
-                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .frame(width: 168, height: 36)
                     .background(spotifyGreen, in: Capsule())
+                    .shadow(color: spotifyGreen.opacity(0.35), radius: 10, y: 3)
                     .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
                 .animation(.smooth(duration: 0.25), value: p.loggingIn)
-                .padding(.top, 2)
+                .padding(.top, 4)
+                Text("Spotify Premium needed for playback control")
+                    .font(.system(size: 9, weight: .medium)).foregroundStyle(.white.opacity(0.38))
             } else {
                 Image(systemName: "music.note").font(.system(size: 30)).foregroundStyle(.white.opacity(0.6))
                 Text(text).font(.system(size: 13, weight: .medium)).multilineTextAlignment(.center)
@@ -490,12 +571,14 @@ struct NowPlaying: View {
             .buttonStyle(.plain)
             .onHover { h in withAnimation(.easeOut(duration: 0.15)) { closeHover = h } }
             .help("Quit")
+            // Albums/lyrics need Spotify: off while signed out or rate limited (their contents can't load).
+            let canBrowse = p.signedIn && p.rateLimitedUntil == nil
             glass("square.grid.2x2", on: p.open && !p.showLyrics) { p.toggleLeft(lyrics: false) }
-                .disabled(!p.signedIn).opacity(p.signedIn ? 1 : 0.35)
+                .disabled(!canBrowse).opacity(canBrowse ? 1 : 0.35)
                 .keyboardShortcut("\\", modifiers: .command)
                 .help("Albums")
             glass("quote.bubble", on: p.open && p.showLyrics) { p.toggleLeft(lyrics: true) }
-                .disabled(!p.signedIn).opacity(p.signedIn ? 1 : 0.35)
+                .disabled(!canBrowse).opacity(canBrowse ? 1 : 0.35)
                 .keyboardShortcut("l", modifiers: .command)
                 .help("Lyrics")
             Spacer(minLength: 0)

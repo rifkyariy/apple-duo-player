@@ -71,3 +71,25 @@ Drag the grab bar down, or click it, to add one more album row of height, which 
 ## Notes
 - Needs Spotify Premium for playback control (a Web API limit).
 - The app runs as a Spotify developer-mode app, so some Spotify-owned playlists can't be read.
+
+## Spotify rate limits
+
+Spotify limits how many requests an app can make in a rolling 30-second window. Apps in **development mode**, like this one by default, get a much lower limit than apps approved for extended quota. When the limit is hit, Spotify answers `429 Too Many Requests` with a `Retry-After` header. That wait can be long: we've seen about 12 hours. See Spotify's [rate limits guide](https://developer.spotify.com/documentation/web-api/concepts/rate-limits).
+
+What Duo Player does about it:
+- **Polls "now playing" sparingly** instead of every second. It checks every 10 seconds while playing, plus right when the current song should end so the next one shows on time. It checks every 30 seconds while paused, about a second after you press a playback button, and not at all while the screen is asleep or locked. Between checks the progress bar and lyrics run on a local clock and buttons update instantly, so it still feels live. The trade-off is that a change made on another device can take up to 10 seconds to show.
+- **Caches your library.** Profile, albums, playlists and top artists are saved to `~/Library/Caches/DuoPlayer/library.json`, shown immediately on launch, and refreshed from Spotify only when the saved copy is more than 6 hours old. Relaunching doesn't re-download everything. Signing out deletes the cache.
+- **Retries missing data at most once a minute** instead of on every poll.
+- **Caches the rest of the `/me` calls in memory.** `/me/*` endpoints can return 429 after only a handful of calls, so the app stores recent answers:
+  - devices for 5 minutes;
+  - whether a song is liked for 1 hour, cleared when you like or unlike;
+  - playlist and album track lists for 1 hour. If a list can't load, the current song is shown as a placeholder.
+
+  The queue is fetched only while the Up next tab is on screen, not on every song change.
+- **Honors `Retry-After`.** While limited, the player shows a countdown to the next try, and the Albums and Lyrics buttons are disabled. Playback in Spotify itself is unaffected.
+
+If you get rate limited anyway:
+- **Wait for the countdown.** Relaunching the app won't help.
+- **Avoid restarting the app over and over.**
+- **Switching client ID won't lift a long block.** We tested it: after hours-long `Retry-After`, a brand-new client ID got the same block with the same end time, so the long penalty seems tied to the account or network, not only the app.
+- **Use your own client ID to share the normal limit less.** Day-to-day limits apply per app (client ID), across all its users, so sharing one client ID between many people uses them up faster. Create an app in the Spotify Developer Dashboard and launch with `SPOTIFY_CLIENT_ID=<your id>`. For heavy use, apply for extended quota mode in the dashboard.
