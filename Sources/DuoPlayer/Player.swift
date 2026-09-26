@@ -62,6 +62,7 @@ struct LibraryCache: Codable {
     var listURI: String?            // what the open list shows (the poll keeps rewriting contextURI)
     var albumURI: String?           // current song's album: fallback when a playlist can't be read
     var contextTracks: [Track] = []
+    var contextUnreadable = false   // tapped playlist Spotify won't list for us (it can still be played)
     var contextBack = "Albums"      // tab the back button returns to
     var tall = false                // extra album row of height; default is the normal size
     var logins = 0
@@ -252,7 +253,8 @@ struct LibraryCache: Codable {
         track = t
         queueStale = true; refreshQueueIfShown()   // only fetched while Up next is on screen
         lyrics = []
-        let liked: [Bool]? = try? await spotify.get("/me/tracks/contains", query: ["ids": t.id], cacheFor: 3600)
+        // Feb 2026 API: /me/tracks/contains became /me/library/contains, keyed by URI.
+        let liked: [Bool]? = try? await spotify.get("/me/library/contains", query: ["uris": "spotify:track:\(t.id)"], cacheFor: 3600)
         self.liked = liked?.first ?? false
         if let art = t.art, let c = await averageColor(art) { withAnimation(.smooth(duration: 1)) { color = c } }
         let lines = await Lyrics.fetch(title: t.title, artist: item.artists.first?.name ?? "", album: t.album, duration: t.duration)
@@ -344,17 +346,23 @@ struct LibraryCache: Codable {
         send("PUT", "/me/player/seek", query: ["position_ms": String(Int(seconds * 1000))])
     }
 
-    // Title tapped: list the tracks of the playlist/album it's playing from, on the left screen.
-    func openContext() {
-        guard let uri = contextURI else { return }
+    // Title tapped (no uri: what's playing), or a playlist tile tapped (its uri + name, shown while it loads).
+    func openContext(_ picked: String? = nil, name: String = "") {
+        guard let uri = picked ?? contextURI else { return }
         let id = String(uri.split(separator: ":").last ?? "")
         if tab != "Context" { contextBack = tab }
         tab = "Context"; showLyrics = false; open = true
-        contextName = ""; contextTracks = []; listURI = uri
+        contextName = name; contextTracks = []; listURI = uri; contextUnreadable = false
         Task {
-            if uri.contains(":playlist:"), let r: SPPlaylistFull = try? await spotify.get("/playlists/\(id)", cacheFor: 3600) {
+            if uri.contains(":playlist:"), let r: SPPlaylistFull = try? await spotify.get("/playlists/\(id)", cacheFor: 3600),
+               let songs = r.songs {
                 contextName = r.name
-                contextTracks = r.tracks.items.compactMap { $0.track.map(Track.init) }
+                contextTracks = songs.map(Track.init)
+                return
+            }
+            // A tapped playlist Spotify won't share (only the user's own list their songs): say so, don't show another album.
+            if picked != nil, uri.contains(":playlist:") {
+                contextUnreadable = true
                 return
             }
             // Album context, or a playlist Spotify won't share with dev-mode apps (e.g. its own mixes): show the song's album.
@@ -367,6 +375,8 @@ struct LibraryCache: Codable {
                     Track(id: $0.id, title: $0.name, artist: $0.artists.map(\.name).joined(separator: ", "), album: a.name,
                           art: a.images.first?.url, duration: Double($0.duration_ms) / 1000)
                 }
+            } else if picked != nil {
+                contextUnreadable = true   // a tapped album that didn't load: offer to play it instead of a stand-in
             } else if let t = track {
                 // Placeholder until Spotify answers again: the song we already know, instead of an empty error.
                 contextName = t.album
@@ -386,8 +396,8 @@ struct LibraryCache: Codable {
     func toggleLike() {
         guard let id = track?.id else { return }
         liked.toggle()
-        spotify.forget("/me/tracks/contains")
-        send(liked ? "PUT" : "DELETE", "/me/tracks", query: ["ids": id])
+        spotify.forget("/me/library/contains")
+        send(liked ? "PUT" : "DELETE", "/me/library", query: ["uris": "spotify:track:\(id)"])   // was /me/tracks before Feb 2026
     }
 
     func transfer(to device: SPDevice) {

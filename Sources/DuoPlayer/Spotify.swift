@@ -207,9 +207,21 @@ struct SPPlayback: Decodable {
 }
 struct SPSimpleTrack: Decodable { let id: String; let name: String; let duration_ms: Int; let artists: [SPNamed] }
 struct SPAlbumFull: Decodable { struct T: Decodable { let items: [SPSimpleTrack] }; let name: String; let images: [SPImage]; let tracks: T }
+// Feb 2026 API: the song list moved from "tracks" (entries' "track") to "items" (entries' "item"), and it's only
+// returned for the user's own/collaborative playlists; others give metadata only (items and tracks both missing).
+// Older apps still get the old names, so read either. Entries that aren't songs (podcast episodes) are skipped.
 struct SPPlaylistFull: Decodable {
-    struct T: Decodable { struct I: Decodable { let track: SPTrack? }; let items: [I] }
-    let name: String; let tracks: T
+    struct Entry: Decodable {
+        let song: SPTrack?
+        enum K: String, CodingKey { case item, track }
+        init(from d: Decoder) throws {
+            let c = try d.container(keyedBy: K.self)
+            song = (try? c.decode(SPTrack.self, forKey: .item)) ?? (try? c.decode(SPTrack.self, forKey: .track))
+        }
+    }
+    struct Page: Decodable { let items: [Entry] }
+    let name: String; let items: Page?; let tracks: Page?
+    var songs: [SPTrack]? { (items ?? tracks).map { $0.items.compactMap(\.song) } }   // nil: Spotify didn't share the list
 }
 struct SPSavedAlbums: Decodable { struct Item: Decodable { let album: SPAlbum }; let items: [Item] }
 struct SPPlaylists: Decodable { struct Item: Decodable { let name: String; let uri: String; let images: [SPImage]? }; let items: [Item?] }

@@ -827,6 +827,21 @@ struct LeftScreen: View {
     // Tracks of the album/playlist now playing (opened by tapping the title); current song highlighted.
     func contextList(_ rowH: CGFloat) -> some View {
         LazyVStack(spacing: 4) {
+            if p.contextUnreadable, let uri = p.listURI {
+                VStack(spacing: 10) {
+                    let playlist = uri.contains(":playlist:")
+                    Text(playlist ? "Spotify doesn't share this playlist's songs with this app, but it can still play it."
+                                  : "Couldn't load this album's songs right now, but it can still play.")
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6)).multilineTextAlignment(.center)
+                    Button { p.play(Album(uri: uri, name: p.contextName, art: nil)) } label: {
+                        Label(playlist ? "Play playlist" : "Play album", systemImage: "play.fill").font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.black).padding(.horizontal, 14).padding(.vertical, 7)
+                            .background(.white, in: Capsule()).contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.top, 24).padding(.horizontal, 12)
+            }
             ForEach(Array(p.contextTracks.enumerated()), id: \.offset) { _, t in
                 Button { p.play(t, inContext: p.listURI) } label: {
                     row(t).padding(.horizontal, 8).frame(height: rowH)   // every row padded alike; current one gets a pill
@@ -871,7 +886,8 @@ struct LeftScreen: View {
     }
 
     func album(_ a: Album) -> some View {
-        Button { p.play(a) } label: {
+        // Albums and playlists open their song list; pick a song there to play it in that album/playlist.
+        Button { withAnimation(.smooth(duration: 0.4)) { p.openContext(a.uri, name: a.name) } } label: {
             Color.clear.aspectRatio(1, contentMode: .fit)   // square tile: whole cover visible
                 .overlay { Art(url: a.art) { Color.white.opacity(0.1) } }
                 .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
