@@ -109,6 +109,8 @@ struct Album: Identifiable {
         }
     }
 
+    private var libraryRetry = Date.distantPast
+
     private func poll() async throws {
         guard let s: SPPlayback = try await spotify.get("/me/player"), let item = s.item else {
             if track != nil || message == nil { devices = (try? await loadDevices()) ?? [] }
@@ -123,23 +125,27 @@ struct Album: Identifiable {
         albumURI = item.album.uri
         contextURI = s.context.map(\.uri).flatMap { $0.contains(":playlist:") || $0.contains(":album:") ? $0 : nil } ?? item.album.uri
         if item.id != track?.id { await trackChanged(item) }
-        if albums.isEmpty { albums = (try? await loadAlbums()) ?? [] }
-        if me == nil { me = try? await spotify.get("/me") }
-        if topArtists.isEmpty && topArtistsNote == nil {
-            // Try recent, then all-time: new accounts often have nothing for one of the ranges.
-            do {
-                for range in ["medium_term", "short_term", "long_term"] where topArtists.isEmpty {
-                    let r: SPTopArtists? = try await spotify.get("/me/top/artists", query: ["limit": "4", "time_range": range])
-                    topArtists = r?.items.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } ?? []
-                }
-                if topArtists.isEmpty { topArtistsNote = "Not enough listening history yet" }
-            } catch let e as Spotify.Failure where e.status == 403 || e.status == 401 {
-                topArtistsNote = "Sign out and sign in again to see top artists"   // old login lacks user-top-read
-            } catch {}
-        }
-        if playlists.isEmpty {
-            let r: SPPlaylists? = try? await spotify.get("/me/playlists", query: ["limit": "50"])
-            playlists = r?.items.compactMap { $0.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } } ?? []
+        // Library/profile: at most once a minute until loaded. Retrying every poll kept Spotify rate limiting (429) us.
+        if Date() >= libraryRetry, albums.isEmpty || me == nil || playlists.isEmpty || (topArtists.isEmpty && topArtistsNote == nil) {
+            libraryRetry = Date() + 60
+            if albums.isEmpty { albums = (try? await loadAlbums()) ?? [] }
+            if me == nil { me = try? await spotify.get("/me") }
+            if topArtists.isEmpty && topArtistsNote == nil {
+                // Try recent, then all-time: new accounts often have nothing for one of the ranges.
+                do {
+                    for range in ["medium_term", "short_term", "long_term"] where topArtists.isEmpty {
+                        let r: SPTopArtists? = try await spotify.get("/me/top/artists", query: ["limit": "4", "time_range": range])
+                        topArtists = r?.items.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } ?? []
+                    }
+                    if topArtists.isEmpty { topArtistsNote = "Not enough listening history yet" }
+                } catch let e as Spotify.Failure where e.status == 403 || e.status == 401 {
+                    topArtistsNote = "Sign out and sign in again to see top artists"   // old login lacks user-top-read
+                } catch {}
+            }
+            if playlists.isEmpty {
+                let r: SPPlaylists? = try? await spotify.get("/me/playlists", query: ["limit": "50"])
+                playlists = r?.items.compactMap { $0.map { Album(uri: $0.uri, name: $0.name, art: $0.images?.first?.url) } } ?? []
+            }
         }
     }
 
