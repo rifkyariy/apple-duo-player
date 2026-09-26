@@ -26,6 +26,11 @@ The compact, folded view:
 - **Side controls**: Library (grid), Lyrics (bubble), Previous, Play/Pause, and Next.
 - **Grab bar**: the pill under the window switches between the normal and tall sizes.
 
+### Now Playing: full album art
+<img src="docs/screenshots/main-art.png" alt="Now playing, full album art" width="300">
+
+Click the album art (or the ⤢ badge) to expand it until it fills the screen. Click it again, or the ⤡ badge, to shrink it back.
+
 ### Library: Albums
 <img src="docs/screenshots/library.png" alt="Albums" width="600">
 
@@ -59,7 +64,9 @@ Clicking the song title lists every track in the album or playlist that is playi
 ### Tall size
 <img src="docs/screenshots/tall.png" alt="Tall" width="600">
 
-Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back.
+<img src="docs/screenshots/tall-folded-art.png" alt="Tall, folded" width="300">
+
+Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back. The tall size works both unfolded (top) and folded (bottom). When folded, the extra height gives the full album art room for the title and artist underneath.
 
 ## Notes
 - Needs Spotify Premium for playback control (a Web API limit).
