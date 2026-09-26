@@ -2,7 +2,7 @@
 
 A floating, iPhone Duo-style Spotify player for macOS. It stays on top of your other windows, folds open into two screens, and controls whatever Spotify is playing through the Spotify Web API.
 
-<img src="docs/screenshots/unfold.gif" alt="Unfold animation" width="600">
+<img src="docs/screenshots/unfold.webp" alt="Unfold animation" width="600">
 
 ## Build & run
 
