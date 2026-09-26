@@ -14,8 +14,10 @@ private let log = Logger(subsystem: "DuoPlayer", category: "spotify")
     static let redirect = "http://127.0.0.1:8898/callback"
     static let scopes = "user-read-playback-state user-modify-playback-state user-read-currently-playing user-library-read user-library-modify playlist-read-private user-top-read"
 
-    // Client IDs are public (PKCE needs no secret). SPOTIFY_CLIENT_ID overrides it for a different app.
-    let clientID = ProcessInfo.processInfo.environment["SPOTIFY_CLIENT_ID"] ?? "404cfd2ae3184631a5726ee19b015cfe"
+    // Each builder uses their own Spotify app, so rate limits aren't shared: build.sh writes the ID into
+    // Info.plist (SpotifyClientID). SPOTIFY_CLIENT_ID at launch overrides it. Client IDs are public (PKCE needs no secret).
+    let clientID = ProcessInfo.processInfo.environment["SPOTIFY_CLIENT_ID"]
+        ?? Bundle.main.object(forInfoDictionaryKey: "SpotifyClientID") as? String ?? ""
 
     private var accessToken: String?
     private var expiry = Date.distantPast
@@ -31,6 +33,9 @@ private let log = Logger(subsystem: "DuoPlayer", category: "spotify")
     // MARK: Auth
 
     func login() async throws {
+        guard !clientID.isEmpty else {
+            throw Failure(status: 0, message: "No Spotify client ID. Build with ./build.sh (see README).")
+        }
         let verifier = Data((0..<64).map { _ in UInt8.random(in: 0...255) }).base64URL
         let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URL
         var c = URLComponents(string: "https://accounts.spotify.com/authorize")!

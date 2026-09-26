@@ -4,14 +4,52 @@ A floating, iPhone Duo-style Spotify player for macOS. It stays on top of your o
 
 <img src="docs/screenshots/unfold.webp" alt="Unfold animation" width="600">
 
-## Build & run
+## Setup
+
+Duo Player talks to Spotify through **your own Spotify app** (a free "client ID"). Each build uses its own ID, so you don't share rate limits, or anything else, with anyone.
+
+You need macOS 15 or later, the Xcode Command Line Tools (`xcode-select --install`), and Spotify Premium for playback control.
+
+### 1. Set up your Spotify app
+
+1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and log in with your Spotify account.
+2. Click **Create app**, then fill in:
+   - **App name:** anything, e.g. `Duo Player`.
+   - **App description:** anything.
+   - **Redirect URI:** `http://127.0.0.1:8898/callback`, typed exactly and then **Add**.
+   - **Which API/SDKs are you planning to use?** Tick **Web API**.
+3. Accept the terms and click **Save**.
+4. Open the app's **Settings** and copy the **Client ID** (32 letters and numbers). You don't need the client secret, because Duo Player uses PKCE sign-in.
+5. New apps are in **development mode**, where only listed accounts can sign in. Under **User Management**, add the email of every Spotify account that will use this build, including your own if it isn't the app's owner.
+
+### 2. Build
 
 ```bash
 ./build.sh
+```
+
+The first time, it asks for your Client ID and saves it in `.spotify-client-id`. That file is git-ignored, so your ID never gets committed. Later builds reuse it. You can also pass the ID directly, which saves it too:
+
+```bash
+SPOTIFY_CLIENT_ID=your_client_id ./build.sh
+```
+
+To switch to a different ID, delete `.spotify-client-id` or pass a new `SPOTIFY_CLIENT_ID`.
+
+### 3. Run and sign in
+
+```bash
 open "build/Duo Player.app"
 ```
 
-On first launch, sign in with Spotify. After a short boot splash the player shows the current track.
+After a short boot splash, click **Log in with Spotify**. Your browser opens Spotify's sign-in page. Approve access, and the player shows what's playing. Start playback on any device (the Spotify app, web player, or a speaker) if nothing shows.
+
+### Troubleshooting
+
+- **`INVALID_CLIENT: Invalid redirect URI`**: the Redirect URI in your Spotify app must be exactly `http://127.0.0.1:8898/callback`. Not `localhost`, and no trailing slash.
+- **Sign-in page says your account isn't allowed**, or you get a 403 after signing in: add your account's email under **User Management** (step 1.5).
+- **"No Spotify client ID"** in the app: it wasn't built with `./build.sh`. Rebuild with it.
+- **"Spotify needs a breather"**: you've hit Spotify's rate limit. See [Spotify rate limits](#spotify-rate-limits) below.
 
 ## Features
 
@@ -91,5 +129,5 @@ What Duo Player does about it:
 If you get rate limited anyway:
 - **Wait for the countdown.** Relaunching the app won't help.
 - **Avoid restarting the app over and over.**
-- **Switching client ID won't lift a long block.** We tested it: after hours-long `Retry-After`, a brand-new client ID got the same block with the same end time, so the long penalty seems tied to the account or network, not only the app.
-- **Use your own client ID to share the normal limit less.** Day-to-day limits apply per app (client ID), across all its users, so sharing one client ID between many people uses them up faster. Create an app in the Spotify Developer Dashboard and launch with `SPOTIFY_CLIENT_ID=<your id>`. For heavy use, apply for extended quota mode in the dashboard.
+- **Switching client ID may not lift a long block.** In one test, after an hours-long `Retry-After`, a newly created client ID was refused on `/me/player` with the same end time. Spotify doesn't document why, so wait it out.
+- **Keep your client ID to yourself.** Limits apply per app (client ID), across all its users, so sharing one ID between many people uses them up faster. That's why `build.sh` uses your own ID (see [Setup](#setup)). For heavy use, apply for extended quota mode in the Spotify Developer Dashboard.
