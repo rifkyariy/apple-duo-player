@@ -36,6 +36,8 @@ SPOTIFY_CLIENT_ID=your_client_id ./build.sh
 
 To switch to a different ID, delete `.spotify-client-id` or pass a new `SPOTIFY_CLIENT_ID`.
 
+> **Found a client ID in this repo's git history?** Nice detective work, but don't bother. Those were mine, and the apps behind them have been deleted. They're as dead as a skipped intro, so make your own. It takes two minutes, and you get a rate limit all to yourself.
+
 ### 3. Run and sign in
 
 ```bash
