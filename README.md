@@ -74,22 +74,26 @@ Click the album art (or the ⤢ badge) to expand it until it fills the screen. C
 ### Library: Albums
 <img src="docs/screenshots/library.png" alt="Albums" width="600">
 
-The grid button unfolds a second screen on the left. **Albums** shows your saved albums, with the most recent one large. Click any album to play it.
+The grid button unfolds a second screen on the left. **Albums** shows your saved albums, with the most recent one large. Click an album to open its song list, then click a song to play the album from there.
 
 ### Library: Playlists
 <img src="docs/screenshots/playlists.png" alt="Playlists" width="600">
 
-Your Spotify playlists. Click one to play it.
+Your Spotify playlists. Click one to open its song list. Spotify only lists the songs of your own (or collaborative) playlists. For anyone else's, you get a **Play playlist** button instead.
 
 ### Up Next
 <img src="docs/screenshots/upnext.png" alt="Up next" width="600">
 
-Spotify's queue, with repeats removed so each song appears once. Click a song to jump to it. Spotify has no "jump into the queue" call, so the app presses Next the right number of times, counted against Spotify's real queue. On repeat-one, clicking the current song restarts it.
+Spotify's queue, with repeats removed so each song appears once. It's only fetched while this tab is showing. Click a song to jump to it:
+
+- **A song from the album or playlist that's playing:** it restarts that album or playlist at the song, exactly.
+- **Anything else, like a song you queued yourself:** it presses Next the right number of times, counted against Spotify's real queue.
+- **With repeat-one on:** clicking the current song restarts it.
 
 ### Profile
 <img src="docs/screenshots/profile.png" alt="Profile" width="600">
 
-The person button shows your Spotify account (avatar, name, followers), a **Sign out** button, and your **Top artists**. Click an artist to play them.
+The person button shows your Spotify account (avatar and name), a **Sign out** button, and your **Top artists**. Click an artist to play them.
 
 ### Lyrics
 <img src="docs/screenshots/lyrics.png" alt="Lyrics" width="600">
@@ -106,11 +110,28 @@ Clicking the song title lists every track in the album or playlist that is playi
 
 <img src="docs/screenshots/tall-folded-art.png" alt="Tall, folded" width="300">
 
-Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back. The tall size works both unfolded (top) and folded (bottom). It also adds a **camera** button to the side controls, which shows your front camera, mirrored, on the left screen. The current lyric line floats over the live view.
+Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back. The tall size works both unfolded (top) and folded (bottom). When folded, the extra height gives the full album art room for the title and artist underneath. It also adds a camera button to the side controls (below).
 
-- **Taking a photo:** press the shutter (or Return) for a 3-2-1 countdown, a flash, and a photo booth print. The print shows your photo with the lyric line sung at that moment, and a caption strip with the album cover and the song (or, flip the toggle, the album).
-- **After the shot:** Retake, Save (a 1080×1350 PNG to Downloads), or Copy.
-- **Privacy:** nothing is saved until you press Save or Copy. The camera runs only while its screen is showing, and turns off as soon as you go back or close the book. macOS asks for camera permission the first time. When folded, the extra height gives the full album art room for the title and artist underneath.
+### Camera and photo booth
+<img src="docs/screenshots/booth-styles.png" alt="Photo booth prints in the Selected, Marker and Poem lyric styles" width="720">
+
+In the tall size, the **camera** button shows your front camera, mirrored, on the left screen, like the Duo's selfie view. The lyric line being sung floats over the live view.
+
+1. **Take a photo:** press the shutter (or Return). The lyric line and the song are held from that moment. After a 3-2-1 countdown, the close dot fires a flash (a faint pre-flash, then the main burst) and the photo is taken.
+2. **Get a print:** the photo becomes a photo booth print, with the lyric line over it, and a caption strip with the album cover, the song and artist, the date, and the Spotify logo.
+3. **Adjust it:**
+   - **Song | Album** (top) switches the caption between the song and the album.
+   - **The lyric button** beside it hides or shows the lyric.
+   - **Swipe the print sideways** to change the lyric style, as shown above:
+     - **Selected:** an iPhone text selection, with handles;
+     - **Marker:** a green highlighter swipe;
+     - **Poem:** serif italic with a quotation mark.
+4. **Keep it:**
+   - **Save** writes a 1080×1350 PNG to Downloads;
+   - **Copy** puts it on the clipboard;
+   - **Retake** goes back to the camera.
+
+**Privacy:** nothing is saved until you press Save or Copy. The camera runs only while its screen is showing, and turns off as soon as you go back or close the book. macOS asks for camera permission the first time.
 
 ## Notes
 - Needs Spotify Premium for playback control (a Web API limit).
