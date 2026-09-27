@@ -70,14 +70,24 @@ struct LibraryCache: Codable {
     var tab = "Albums" { didSet { refreshQueueIfShown() } }   // left screen tab (here, not @State, so fold copies match)
     var showLyrics = false { didSet { refreshQueueIfShown() } }   // left screen: full lyrics instead of albums
     var fullArt = false             // first screen: album cover only
+    var flashTick = 0               // camera shutter fired: the close dot flashes white
     var seeking = false             // user is dragging the seek bar; don't let polls fight it
 
     var duration: Double { track?.duration ?? 1 }
     var line: Int? { Lyrics.index(lyrics, at: progress) }
+    var lyricNow: String? { line.map { lyrics[$0].text }.flatMap { $0 == "♪" ? nil : $0 } }   // sung line, not an instrumental gap
 
     // Rail buttons: open the book on that screen, or close it if it's already showing.
     func toggleLeft(lyrics: Bool) {
+        if tab == "Camera" { tab = contextBack; showLyrics = lyrics; open = true; return }   // camera showing: switch, don't close
         if open && showLyrics == lyrics { open = false } else { showLyrics = lyrics; open = true }
+    }
+
+    // Tall size's camera button: the front camera on the left screen; pressed again, the book closes.
+    func toggleCamera() {
+        if open && tab == "Camera" && !showLyrics { open = false; return }
+        if tab != "Camera" { contextBack = tab }
+        tab = "Camera"; showLyrics = false; open = true
     }
 
     // MARK: Loop
@@ -331,6 +341,15 @@ struct LibraryCache: Codable {
         // somewhere else, so restart the song instead.
         if t.id == track?.id { seek(to: 0); return }
         Task {
+            // Song from the album/playlist that's playing: restart that context at the song, exactly. Counting "next"
+            // presses drifts when repeat lists the album twice or autoplay songs follow it (landed on a random song).
+            if let ctx = contextURI {
+                do {
+                    try await spotify.call("PUT", "/me/player/play", body: ["context_uri": ctx, "offset": ["uri": "spotify:track:\(t.id)"]])
+                    pollSoon(); return
+                } catch let e as Spotify.Failure where e.status == 429 { _ = handle(e); return }
+                catch {}   // not in that context (e.g. a song you queued yourself): count presses below
+            }
             // Count "next" presses in Spotify's real queue, read fresh (the shown list drops repeats and may be ahead of Spotify).
             guard let i = await loadQueue().firstIndex(where: { $0.id == t.id }) else { return }
             do { for _ in 0...i { try await spotify.call("POST", "/me/player/next") }; pollSoon() } catch { _ = handle(error) }

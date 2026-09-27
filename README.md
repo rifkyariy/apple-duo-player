@@ -106,7 +106,11 @@ Clicking the song title lists every track in the album or playlist that is playi
 
 <img src="docs/screenshots/tall-folded-art.png" alt="Tall, folded" width="300">
 
-Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back. The tall size works both unfolded (top) and folded (bottom). When folded, the extra height gives the full album art room for the title and artist underneath.
+Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back. The tall size works both unfolded (top) and folded (bottom). It also adds a **camera** button to the side controls, which shows your front camera, mirrored, on the left screen. The current lyric line floats over the live view.
+
+- **Taking a photo:** press the shutter (or Return) for a 3-2-1 countdown, a flash, and a photo booth print. The print shows your photo with the lyric line sung at that moment, and a caption strip with the album cover and the song (or, flip the toggle, the album).
+- **After the shot:** Retake, Save (a 1080×1350 PNG to Downloads), or Copy.
+- **Privacy:** nothing is saved until you press Save or Copy. The camera runs only while its screen is showing, and turns off as soon as you go back or close the book. macOS asks for camera permission the first time. When folded, the extra height gives the full album art room for the title and artist underneath.
 
 ## Notes
 - Needs Spotify Premium for playback control (a Web API limit).

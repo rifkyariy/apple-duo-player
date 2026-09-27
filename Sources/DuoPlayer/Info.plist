@@ -10,5 +10,6 @@
     <key>CFBundleShortVersionString</key><string>0.1</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>NSCameraUsageDescription</key><string>Duo Player shows your front camera on the second screen, like the Duo's selfie view.</string>
 </dict>
 </plist>

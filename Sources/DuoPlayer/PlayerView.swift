@@ -359,6 +359,47 @@ struct RateLimited: View {
     }
 }
 
+// Shutter flash on the close dot (where a phone's front flash would sit), timed like a real one:
+// a faint pre-flash, a short gap, then the main burst: instant full brightness, a brief hold, a fast decay.
+struct FlashLED: View {
+    static let preToMain = 0.2   // seconds from pre-flash to the main burst (the shutter fires on the burst)
+    let tick: Int
+    @State private var level = 0.0   // 0 off … 1 full burst
+
+    var body: some View {
+        ZStack {
+            // Overexposure: a big white bloom washing over the screen around the LED, added on top (plus-lighter).
+            Circle().fill(RadialGradient(colors: [.white.opacity(0.85), .white.opacity(0.45), .white.opacity(0)], center: .center, startRadius: 0, endRadius: 90))
+                .frame(width: 180, height: 180).scaleEffect(0.4 + 0.8 * level).opacity(level * level)
+                .blendMode(.plusLighter)
+            // Lens flare: a thin starburst through the LED.
+            ForEach([0.0, 90, 45, 135], id: \.self) { deg in
+                Capsule().fill(.white).frame(width: deg.truncatingRemainder(dividingBy: 90) == 0 ? 56 : 30, height: 1.5)
+                    .rotationEffect(.degrees(deg)).opacity(level * 0.9)
+            }
+            .blendMode(.plusLighter)
+            // The LED itself: the brightest point, blown-out white.
+            Circle().fill(.white)
+                .frame(width: 13, height: 13)
+                .shadow(color: .white, radius: 6 * level).shadow(color: .white, radius: 18 * level)
+                .scaleEffect(0.8 + 0.7 * level)
+        }
+        .frame(width: 13, height: 13)   // dot-sized in layout; the bloom and flare spill past it
+        .opacity(level)
+        .allowsHitTesting(false)
+            .onChange(of: tick) {
+                Task { @MainActor in
+                    withAnimation(.linear(duration: 0.02)) { level = 0.35 }            // pre-flash
+                    withAnimation(.easeOut(duration: 0.08).delay(0.04)) { level = 0 }
+                    try? await Task.sleep(for: .seconds(Self.preToMain))
+                    withAnimation(.linear(duration: 0.015)) { level = 1 }              // main burst
+                    try? await Task.sleep(for: .seconds(0.09))                        // hold
+                    withAnimation(.easeOut(duration: 0.3)) { level = 0 }               // decay
+                }
+            }
+    }
+}
+
 // MARK: - Right half: now playing + side controls
 
 struct NowPlaying: View {
@@ -565,6 +606,7 @@ struct NowPlaying: View {
             Button { NSApp.terminate(nil) } label: {
                 Circle().fill(closeHover ? Color(red: 0.55, green: 0.1, blue: 0.1) : Color(white: 0.3))   // dark red on hover
                     .overlay(Circle().stroke(.black, lineWidth: 1))
+                    .overlay(FlashLED(tick: p.flashTick))
                     .frame(width: 13, height: 13)
                     .frame(width: 24, height: 24).contentShape(Circle())
             }
@@ -573,7 +615,7 @@ struct NowPlaying: View {
             .help("Quit")
             // Albums/lyrics need Spotify: off while signed out or rate limited (their contents can't load).
             let canBrowse = p.signedIn && p.rateLimitedUntil == nil
-            glass("square.grid.2x2", on: p.open && !p.showLyrics) { p.toggleLeft(lyrics: false) }
+            glass("square.grid.2x2", on: p.open && !p.showLyrics && p.tab != "Camera") { p.toggleLeft(lyrics: false) }
                 .disabled(!canBrowse).opacity(canBrowse ? 1 : 0.35)
                 .keyboardShortcut("\\", modifiers: .command)
                 .help("Albums")
@@ -581,6 +623,10 @@ struct NowPlaying: View {
                 .disabled(!canBrowse).opacity(canBrowse ? 1 : 0.35)
                 .keyboardShortcut("l", modifiers: .command)
                 .help("Lyrics")
+            if p.tall {   // tall size has room for one more: the front camera, like the Duo's selfie screen
+                glass("camera", on: p.open && p.tab == "Camera" && !p.showLyrics) { p.toggleCamera() }
+                    .help("Camera")
+            }
             Spacer(minLength: 0)
             glass("backward.fill") { p.prev() }.keyboardShortcut(.leftArrow, modifiers: [])
             glass(p.playing ? "pause.fill" : "play.fill", prominent: true) { p.togglePlay() }
@@ -611,7 +657,7 @@ struct LeftScreen: View {
     let p: Player
     var tab: String { p.tab }
     @State private var forward = true   // slide direction: new tab is to the right of the old one
-    static let order = ["Albums", "Playlists", "Up next", "Profile", "Context"]
+    static let order = ["Albums", "Playlists", "Up next", "Profile", "Context", "Camera"]
     func go(_ t: String) {
         forward = Self.order.firstIndex(of: t)! > Self.order.firstIndex(of: tab)!
         withAnimation(.spring(response: 0.42, dampingFraction: 0.88)) { p.tab = t }   // swipe feel
@@ -621,9 +667,12 @@ struct LeftScreen: View {
 
     var body: some View {
         ZStack {
-            if p.showLyrics { LyricsView(p: p).transition(.blurReplace) } else { library.transition(.blurReplace) }
+            if p.showLyrics { LyricsView(p: p).transition(.blurReplace) }
+            else if tab == "Camera" { CameraScreen(p: p).transition(.blurReplace) }   // edge to edge, no tabs
+            else { library.transition(.blurReplace) }
         }
         .animation(.smooth(duration: 0.45), value: p.showLyrics)
+        .animation(.smooth(duration: 0.45), value: tab == "Camera")
     }
 
     // Albums / Playlists / Up next, switched by a segmented tab bar.
