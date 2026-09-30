@@ -115,7 +115,7 @@ Drag the grab bar down, or click it, to add one more album row of height, which 
 ### Camera and photo booth
 <img src="docs/screenshots/booth-styles.png" alt="Photo booth prints in the Selected, Marker and Poem lyric styles" width="720">
 
-In the tall size, the **camera** button shows your front camera, mirrored, on the left screen, like the Duo's selfie view. The lyric line being sung floats over the live view.
+In the tall size, the **camera** button shows your front camera, mirrored, on the left screen, like the Duo's selfie view. The lyric line being sung floats over the live view. Swipe the live view sideways (or click the filter button beside the shutter) to change the look, applied live and to the photo: **Normal**, **B&W**, **Chroma** (chromatic aberration), **Pixel**, or **Grain** (film noise).
 
 1. **Take a photo:** press the shutter (or Return). The lyric line and the song are held from that moment. After a 3-2-1 countdown, the close dot fires a flash (a faint pre-flash, then the main burst) and the photo is taken.
 2. **Get a print:** the photo becomes a photo booth print, with the lyric line over it, and a caption strip with the album cover, the song and artist, the date, and the Spotify logo.
@@ -124,8 +124,8 @@ In the tall size, the **camera** button shows your front camera, mirrored, on th
    - **The lyric button** beside it hides or shows the lyric.
    - **Swipe the print sideways** to change the lyric style, as shown above:
      - **Selected:** an iPhone text selection, with handles;
-     - **Marker:** a green highlighter swipe;
-     - **Poem:** serif italic with a quotation mark.
+     - **Marker:** a lyric sheet over the photo, with the lines around the moment in soft white and the one you shot on marked in green highlighter;
+     - **Poem:** a magazine cover, with the photo full-bleed under a "Verse" masthead, the lyric as the cover line (its longest word in italics), and the song, Spotify logo and date along the bottom.
 4. **Keep it:**
    - **Save** writes a 1080×1350 PNG to Downloads;
    - **Copy** puts it on the clipboard;

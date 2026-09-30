@@ -63,7 +63,9 @@ struct LibraryCache: Codable {
     var albumURI: String?           // current song's album: fallback when a playlist can't be read
     var contextTracks: [Track] = []
     var contextUnreadable = false   // tapped playlist Spotify won't list for us (it can still be played)
-    var contextBack = "Albums"      // tab the back button returns to
+    var contextBack = "Albums"      // tab the album/playlist list's back button returns to
+    var cameraBack = "Albums"       // tab the camera's back button returns to (its own: sharing contextBack left the
+                                    // list's back pointing at the list itself after a camera trip)
     var tall = false                // extra album row of height; default is the normal size
     var logins = 0
     var loggingIn = false           // sign-in button shows a spinner
@@ -79,14 +81,14 @@ struct LibraryCache: Codable {
 
     // Rail buttons: open the book on that screen, or close it if it's already showing.
     func toggleLeft(lyrics: Bool) {
-        if tab == "Camera" { tab = contextBack; showLyrics = lyrics; open = true; return }   // camera showing: switch, don't close
+        if tab == "Camera" { tab = cameraBack; showLyrics = lyrics; open = true; return }   // camera showing: switch, don't close
         if open && showLyrics == lyrics { open = false } else { showLyrics = lyrics; open = true }
     }
 
     // Tall size's camera button: the front camera on the left screen; pressed again, the book closes.
     func toggleCamera() {
         if open && tab == "Camera" && !showLyrics { open = false; return }
-        if tab != "Camera" { contextBack = tab }
+        if tab != "Camera" { cameraBack = tab }
         tab = "Camera"; showLyrics = false; open = true
     }
 
