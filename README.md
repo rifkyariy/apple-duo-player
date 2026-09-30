@@ -113,12 +113,25 @@ Clicking the song title lists every track in the album or playlist that is playi
 Drag the grab bar down, or click it, to add one more album row of height, which is closer to the real Duo proportions. Drag it up to go back. The tall size works both unfolded (top) and folded (bottom). When folded, the extra height gives the full album art room for the title and artist underneath. It also adds a camera button to the side controls (below).
 
 ### Camera and photo booth
+<img src="docs/screenshots/booth-real.png" alt="A real photo booth print: a selfie with the song playing (the feeling by Steve Lacy), the Spotify logo and the date" width="300">
+
+*A real print, taken while "the feeling" by Steve Lacy was playing.*
+
+In the tall size, the **camera** button shows your front camera, mirrored, on the left screen, like the Duo's selfie view. The lyric line being sung floats over the live view.
+
+**Filters:** swipe the live view sideways, or click the filter button beside the shutter, to change the look. The filter applies live and to the photo:
+- **Normal**
+- **B&W**
+- **Chroma:** chromatic aberration.
+- **Pixel**
+- **Grain:** film noise.
+
+**Lyric styles:** each print can carry the lyric in one of three styles, shown here with stand-in images:
+
 <img src="docs/screenshots/booth-styles.png" alt="Photo booth prints in the Selected, Marker and Poem lyric styles" width="720">
 
-In the tall size, the **camera** button shows your front camera, mirrored, on the left screen, like the Duo's selfie view. The lyric line being sung floats over the live view. Swipe the live view sideways (or click the filter button beside the shutter) to change the look, applied live and to the photo: **Normal**, **B&W**, **Chroma** (chromatic aberration), **Pixel**, or **Grain** (film noise).
-
 1. **Take a photo:** press the shutter (or Return). The lyric line and the song are held from that moment. After a 3-2-1 countdown, the close dot fires a flash (a faint pre-flash, then the main burst) and the photo is taken.
-2. **Get a print:** the photo becomes a photo booth print, with the lyric line over it, and a caption strip with the album cover, the song and artist, the date, and the Spotify logo.
+2. **Get a print:** the photo becomes a photo booth print, with a caption strip showing the album cover, the song and artist, the date, and the Spotify logo. If a lyric line was being sung, it's added in the chosen lyric style; you can turn it off.
 3. **Adjust it:**
    - **Song | Album** (top) switches the caption between the song and the album.
    - **The lyric button** beside it hides or shows the lyric.
