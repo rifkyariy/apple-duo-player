@@ -47,6 +47,7 @@ struct LibraryCache: Codable {
     var liked = false
     var color = Color(red: 0.35, green: 0.33, blue: 0.5)   // wallpaper, from the album art
     var lyrics: [LyricLine] = []
+    var lyricsAreMine = false       // the current lyrics are ones you pasted/imported (can be published to LRCLIB)
     var albums: [Album] = []
     var playlists: [Album] = []
     var me: SPMe?
@@ -77,6 +78,32 @@ struct LibraryCache: Codable {
 
     var duration: Double { track?.duration ?? 1 }
     var line: Int? { Lyrics.index(lyrics, at: progress) }
+    /// Timed lyrics you supply for the current song (pasted text or an .lrc file). False if it has no timed lines.
+    @discardableResult
+    func importLyrics(_ lrc: String) -> Bool {
+        guard let id = track?.id else { return false }
+        let lines = Lyrics.saveLocal(lrc, id: id)
+        guard !lines.isEmpty else { return false }
+        withAnimation(.smooth(duration: 0.5)) { lyrics = lines }
+        lyricsAreMine = true
+        return true
+    }
+
+    /// Publish button: after you confirm, uploads your saved lyrics for this song to LRCLIB under Spotify's details.
+    func publishLyrics() async -> String {
+        guard let t = track else { return "Nothing playing" }
+        let artist = t.artist.components(separatedBy: ", ").first ?? t.artist
+        let a = NSAlert()
+        a.messageText = "Publish these lyrics to LRCLIB?"
+        a.informativeText = "\"\(t.title)\" by \(artist)\nAlbum: \(t.album) · \(Int(t.duration) / 60):\(String(format: "%02d", Int(t.duration) % 60))\n\nThey'll be public on lrclib.net, and apps that use LRCLIB (including Duo Player) will show them for this song."
+        a.addButton(withTitle: "Publish"); a.addButton(withTitle: "Cancel")
+        guard a.runModal() == .alertFirstButtonReturn else { return "" }
+        do {
+            try await Lyrics.publish(id: t.id, title: t.title, artist: artist, album: t.album, duration: t.duration)
+            return "Published to LRCLIB"
+        } catch { return error.localizedDescription }
+    }
+
     var lyricNow: String? { line.map { lyrics[$0].text }.flatMap { $0 == "♪" ? nil : $0 } }   // sung line, not an instrumental gap
 
     // Rail buttons: open the book on that screen, or close it if it's already showing.
@@ -269,7 +296,8 @@ struct LibraryCache: Codable {
         let liked: [Bool]? = try? await spotify.get("/me/library/contains", query: ["uris": "spotify:track:\(t.id)"], cacheFor: 3600)
         self.liked = liked?.first ?? false
         if let art = t.art, let c = await averageColor(art) { withAnimation(.smooth(duration: 1)) { color = c } }
-        let lines = await Lyrics.fetch(title: t.title, artist: item.artists.first?.name ?? "", album: t.album, duration: t.duration)
+        lyricsAreMine = FileManager.default.fileExists(atPath: Lyrics.localURL(t.id).path)
+        let lines = await Lyrics.fetch(id: t.id, title: t.title, artist: item.artists.first?.name ?? "", album: t.album, duration: t.duration)
         if track?.id == t.id { lyrics = lines }
         devices = (try? await loadDevices()) ?? devices
     }

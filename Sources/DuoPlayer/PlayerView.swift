@@ -953,12 +953,69 @@ struct LyricsView: View {
     @State private var manual = false      // user is reading by scrolling: all lines sharp, no auto-follow
     @State private var idle: Task<Void, Never>?
 
+    @State private var publishing = false
+    @State private var publishNote: String?
+
     var body: some View {
-        if p.lyrics.isEmpty {
+        if p.lyrics.isEmpty { empty } else {
+            lyrics.overlay(alignment: .bottomTrailing) {   // your own lyrics: offer to share them on LRCLIB
+                if p.lyricsAreMine {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        if let publishNote { Text(publishNote).font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.8)) }
+                        pill(publishing ? "Publishing…" : "Publish to LRCLIB", "icloud.and.arrow.up") {
+                            publishing = true
+                            Task { publishNote = await p.publishLyrics(); publishing = false }
+                        }
+                        .disabled(publishing)
+                    }
+                    .padding(10)
+                }
+            }
+        }
+    }
+
+    // No timed lyrics found: offer to paste or import your own (.lrc), or drop a file here.
+    @State private var importNote: String?
+    var empty: some View {
+        VStack(spacing: 12) {
             Text("No lyrics for this song").font(.system(size: 18, weight: .bold)).foregroundStyle(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else { lyrics }
+            Text("Have timed lyrics (.lrc)? Copy them and paste, import a file, or drop one here.")
+                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.45)).multilineTextAlignment(.center)
+            HStack(spacing: 8) {
+                pill("Paste lyrics", "doc.on.clipboard") {
+                    let text = NSPasteboard.general.string(forType: .string) ?? ""
+                    importNote = p.importLyrics(text) ? nil : "No timed lines ([mm:ss.xx] …) on the clipboard"
+                }
+                pill("Import .lrc", "square.and.arrow.down") {
+                    let panel = NSOpenPanel()
+                    panel.allowedContentTypes = [.init(filenameExtension: "lrc") ?? .plainText, .plainText]
+                    if panel.runModal() == .OK, let url = panel.url, let text = try? String(contentsOf: url, encoding: .utf8) {
+                        importNote = p.importLyrics(text) ? nil : "That file has no timed lines"
+                    }
+                }
+            }
+            if let importNote { Text(importNote).font(.system(size: 10, weight: .semibold)).foregroundStyle(.white.opacity(0.7)) }
+        }
+        .padding(.horizontal, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first, let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
+            let ok = p.importLyrics(text)
+            importNote = ok ? nil : "That file has no timed lines"
+            return ok
+        }
+    }
+
+    func pill(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label(title, systemImage: icon).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                .padding(.horizontal, 12).frame(height: 30)
+                .background(.white.opacity(0.16), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(0.25), lineWidth: 0.5))
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     var lyrics: some View {
