@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct PlayerView: View {
     @State private var p = Player()
@@ -1116,19 +1117,17 @@ struct Art<P: View>: View {
     }
 }
 
-// Boot splash on the cover, like an iPhone starting up: black, the Apple logo fades in,
-// then a ripple opens from the center and reveals the player.
+// Boot splash on the cover: the Duo Player oil-lens animation (splash.mp4, docs/logo) plays,
+// then a ripple opens from the corner and reveals the player.
 struct Splash: View {
     let done: () -> Void
-    @State private var logo = false
     @State private var ripple: CGFloat = 0   // 0 closed … 1 fully open
 
     var body: some View {
         let d = hypot(screenW, screenH) * 2.2 * ripple   // hole diameter; grows from the bottom-left corner
         ZStack {
             Color.black
-            Image(systemName: "apple.logo").font(.system(size: 54)).foregroundStyle(.white)
-                .opacity(logo ? 1 : 0).blur(radius: logo ? 0 : 8).scaleEffect(logo ? 1 : 0.92)
+            SplashVideo()
         }
         .mask {
             Rectangle().overlay(Circle().frame(width: d, height: d).blur(radius: 12).blendMode(.destinationOut)
@@ -1141,15 +1140,30 @@ struct Splash: View {
         }
         .allowsHitTesting(ripple < 0.5)
         .task {
-            try? await Task.sleep(for: .seconds(0.3))
-            withAnimation(.easeOut(duration: 0.9)) { logo = true }
-            try? await Task.sleep(for: .seconds(1.9))
-            withAnimation(.easeOut(duration: 0.35)) { logo = false }
+            try? await Task.sleep(for: .seconds(3.8))   // the clip is 4 s; open just before its last frame
             withAnimation(.timingCurve(0.5, 0, 0.2, 1, duration: 1.1)) { ripple = 1 }
             try? await Task.sleep(for: .seconds(1.15))
             done()
         }
     }
+}
+
+// The splash clip, muted, filling the cover (its black background bleeds past the crop).
+struct SplashVideo: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        v.wantsLayer = true
+        guard let url = Bundle.main.url(forResource: "splash", withExtension: "mp4") else { return v }
+        let player = AVPlayer(url: url)
+        player.isMuted = true
+        let layer = AVPlayerLayer(player: player)
+        layer.videoGravity = .resizeAspectFill
+        layer.backgroundColor = .black
+        v.layer = layer
+        player.play()
+        return v
+    }
+    func updateNSView(_ v: NSView, context: Context) {}
 }
 
 let spotifyGreen = Color(red: 0.114, green: 0.725, blue: 0.329)   // #1DB954
