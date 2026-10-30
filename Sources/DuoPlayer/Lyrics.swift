@@ -26,9 +26,15 @@ enum Lyrics {
             c.queryItems = q.map { .init(name: $0.key, value: $0.value) }
             var req = URLRequest(url: c.url!)
             req.setValue("DuoPlayer/0.1", forHTTPHeaderField: "User-Agent")   // LRCLIB asks clients to identify themselves
-            guard let (data, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-            return try? JSONDecoder().decode(T.self, from: data)
+            // LRCLIB often answers 503 "server is busy": retry that (and network errors) instead of reading it as "no lyrics".
+            for attempt in 0..<4 {
+                if attempt > 0 { try? await Task.sleep(for: .seconds(Double(1 << attempt))) }   // 2, 4, 8 s
+                guard let (data, resp) = try? await URLSession.shared.data(for: req) else { continue }
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if code == 200 { return try? JSONDecoder().decode(T.self, from: data) }
+                if code != 429 && code < 500 { return nil }   // 404 etc: a real miss
+            }
+            return nil
         }
         // 1. Exact match.
         let exact: R? = await get("get", ["track_name": title, "artist_name": artist, "album_name": album,
