@@ -1,5 +1,7 @@
 # Duo Player
 
+<img src="docs/logo/app-icon-1024.png" alt="Duo Player app icon" width="160"> <img src="docs/logo/splash.gif" alt="Splash animation: the Duo Player mark under a lens of oil, then the wordmark" width="320">
+
 A floating, iPhone Duo-style Spotify player for macOS. It stays on top of your other windows, folds open into two screens, and controls whatever Spotify is playing through the Spotify Web API.
 
 <img src="docs/screenshots/unfold.webp" alt="Unfold animation" width="600">
