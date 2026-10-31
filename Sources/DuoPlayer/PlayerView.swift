@@ -119,7 +119,7 @@ struct Wallpaper: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !wave)) { tl in   // slow drift: 30fps looks the same, costs far less than 120
             let k = wave ? tl.date.timeIntervalSinceReferenceDate * 2.2 : 0   // speed
-            ZStack {
+            if color == .black { Color.black } else { ZStack {
                 LinearGradient(colors: [color.mix(with: .white, by: 0.15), color.mix(with: .black, by: 0.6)],
                                startPoint: .topTrailing, endPoint: .bottomLeading)
                 Circle().fill(color.mix(with: .white, by: 0.35)).frame(width: 260).blur(radius: 70)
@@ -132,7 +132,7 @@ struct Wallpaper: View {
                     Circle().fill(glows[1]).frame(width: 180).blur(radius: 60)
                         .offset(x: screenW * 0.5 + 120 * sin(k * 0.38 + 2), y: -40 + 100 * cos(k * 0.52 + 1))
                 }
-            }
+            } }
         }
         .frame(width: screenW * 2, height: screenH)
     }
@@ -198,7 +198,7 @@ struct Device: View, Animatable {
         let motion = smoothstep(front ? t * 2 : (1 - t) * 2)   // 0 flat, 1 edge-on
         let quad = CoverQuad(t: t, hinge: hinge)
         let limited = p.rateLimitedUntil != nil
-        let color = limited ? limitColor : !p.signedIn ? loginColor : p.color
+        let color = limited ? limitColor : !p.signedIn ? loginColor : p.track == nil ? .black : p.color   // idle: plain black
         let wave = !p.signedIn || limited, glows = limited ? limitGlows : loginGlows
         ZStack(alignment: .topLeading) {
             place(Half(right: true, color: color, wave: wave, glows: glows, hingeBezel: 1 - smoothstep(t * 2)) { NowPlaying(p: p, t: t) }, x: hinge)
@@ -410,7 +410,8 @@ struct NowPlaying: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            info
+            // Not on info itself: a modifier on a Group goes to each branch, so the cover would leave with the idle one.
+            ZStack { info }.overlay { ConnectReveal(p: p) }
             rail
         }
         .padding(.leading, 18).padding(.vertical, 14).padding(.trailing, 8)
@@ -464,8 +465,7 @@ struct NowPlaying: View {
                     .transition(.blurReplace)
                 } else {
                     if let until = p.rateLimitedUntil { RateLimited(until: until, retrying: p.retrying) { p.retryNow() } }
-                    else if let m = p.message { status(m, button: nil) {} }   // no "Loading…": the login ripple covers that moment
-                    else { Color.clear }   // keeps the width so the button column stays on the edge
+                    else { Color.clear }   // idle: ConnectReveal draws it. No "Loading…": the login ripple covers that moment   // keeps the width so the button column stays on the edge
                 }
             }
             .foregroundStyle(.white)
@@ -614,8 +614,8 @@ struct NowPlaying: View {
             .buttonStyle(.plain)
             .onHover { h in withAnimation(.easeOut(duration: 0.15)) { closeHover = h } }
             .help("Quit")
-            // Albums/lyrics need Spotify: off while signed out or rate limited (their contents can't load).
-            let canBrowse = p.signedIn && p.rateLimitedUntil == nil
+            // Albums/lyrics need Spotify playing: off while signed out, rate limited or idle.
+            let canBrowse = p.signedIn && p.rateLimitedUntil == nil && p.track != nil
             glass("square.grid.2x2", on: p.open && !p.showLyrics && p.tab != "Camera") { p.toggleLeft(lyrics: false) }
                 .disabled(!canBrowse).opacity(canBrowse ? 1 : 0.35)
                 .keyboardShortcut("\\", modifiers: .command)
@@ -629,10 +629,13 @@ struct NowPlaying: View {
                     .help("Camera")
             }
             Spacer(minLength: 0)
-            glass("backward.fill") { p.prev() }.keyboardShortcut(.leftArrow, modifiers: [])
-            glass(p.playing ? "pause.fill" : "play.fill", prominent: true) { p.togglePlay() }
-                .keyboardShortcut(.space, modifiers: [])
-            glass("forward.fill") { p.next() }.keyboardShortcut(.rightArrow, modifiers: [])
+            Group {   // nothing to control until Spotify plays somewhere
+                glass("backward.fill") { p.prev() }.keyboardShortcut(.leftArrow, modifiers: [])
+                glass(p.playing ? "pause.fill" : "play.fill", prominent: true) { p.togglePlay() }
+                    .keyboardShortcut(.space, modifiers: [])
+                glass("forward.fill") { p.next() }.keyboardShortcut(.rightArrow, modifiers: [])
+            }
+            .disabled(p.track == nil).opacity(p.track == nil ? 0.35 : 1)
         }
         .frame(width: 42)
         .focusEffectDisabled()   // no keyboard focus ring (accent color) around the first button
@@ -1164,6 +1167,117 @@ struct SplashVideo: NSViewRepresentable {
         return v
     }
     func updateNSView(_ v: NSView, context: Context) {}
+}
+
+// Nothing playing: the Duo mark under the splash's oil (OilRipple), centred, and what to do just under the tile.
+struct IdleRipple: View {
+    let text: String
+    var album: NSImage? = nil
+
+    var body: some View {
+        ZStack {
+            OilRipple(album: album).frame(width: 220, height: 220)
+                .mask(RadialGradient(stops: [.init(color: .black, location: 0.75), .init(color: .clear, location: 1)], center: .center, startRadius: 0, endRadius: 110))   // no square edge
+            Text(text).font(.system(size: 11, weight: .medium)).multilineTextAlignment(.center)
+                .foregroundStyle(.white.opacity(0.6))
+                .offset(y: 68)   // just under the tile (its half-size is ~51 pt)
+                .opacity(album == nil ? 1 : 0).animation(.smooth(duration: 0.4), value: album == nil)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(false)
+    }
+}
+
+// The idle screen as a black cover over the player. When a song turns up, its album art rises into the
+// middle of the oil in place of the mark (on a swell and a fresh wave), holds there, then a hole opens
+// from the centre, its rim split into colour, and sweeps the cover away to the player.
+// It is always there while idle, so the player never shows for a frame first.
+struct ConnectReveal: View {
+    let p: Player
+    @State private var shown = false
+    @State private var album: NSImage?
+    @State private var open: CGFloat = 0   // 0 closed … 1 the hole covers the screen
+    @State private var text = ""
+
+    var idle: Bool { p.signedIn && p.rateLimitedUntil == nil && p.track == nil && p.message != nil }
+
+    func rim(_ color: Color, _ d: CGFloat, width: CGFloat = 3, blur: CGFloat = 2) -> some View {
+        Circle().stroke(color.opacity(0.9 * Double(1 - open)), lineWidth: width).frame(width: d, height: d).blur(radius: blur).blendMode(.plusLighter)
+    }
+
+    var body: some View {
+        GeometryReader { g in
+            let c = CGPoint(x: g.size.width / 2, y: g.size.height / 2)   // the oil's centre
+            let d: CGFloat = (hypot(screenW, screenH) * 1.15 + 40) * open   // just past the far corners, so the whole sweep is seen
+            if shown {
+                ZStack {
+                    Color.black.padding(-300)   // past the info column's padding to the whole screen (the screen clips it)
+                    IdleRipple(text: text, album: album)
+                }
+                .mask {
+                    Rectangle().padding(-300)
+                        .overlay(Circle().frame(width: d, height: d).blur(radius: 6).blendMode(.destinationOut).position(c))
+                        .compositingGroup()
+                }
+                .overlay {   // the hole's rim in the oil's colours: cyan inside, blue, violet outside, in a blue glow
+                    ZStack {
+                        rim(Color(red: 0.25, green: 0.4, blue: 1), d, width: 16, blur: 14)
+                        rim(Color(red: 0.4, green: 0.95, blue: 1), d - 10 * open)
+                        rim(Color(red: 0.2, green: 0.35, blue: 1), d)
+                        rim(Color(red: 0.55, green: 0.2, blue: 1), d + 10 * open)
+                    }
+                    .position(c)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .onAppear { shown = idle; text = p.message ?? "" }
+        .onChange(of: p.message) { if let m = p.message, idle { text = m } }
+        .onChange(of: idle) {
+            guard idle else { return }
+            open = 0; album = nil; text = p.message ?? ""
+            withAnimation(.smooth(duration: 0.5)) { shown = true }
+        }
+        // Keyed on the song itself: poll() clears the message a moment before it sets the track.
+        .onChange(of: p.track?.id) { if let t = p.track, shown, album == nil, open == 0 { Task { await reveal(t.art) } } }
+        .onChange(of: p.signedIn && p.rateLimitedUntil == nil) { if !p.signedIn || p.rateLimitedUntil != nil { shown = false } }   // those screens take over
+    }
+
+    func reveal(_ url: URL?) async {
+        var img = url.flatMap { artCache.object(forKey: $0 as NSURL) }
+        if img == nil, let url, let (data, _) = try? await URLSession.shared.data(from: url) {
+            img = NSImage(data: data)
+            if let img { artCache.setObject(img, forKey: url as NSURL) }
+        }
+        if let img {
+            album = img   // rises into the oil (OilRenderer.setAlbum)
+            try? await Task.sleep(for: .seconds(1.8))
+        }
+        guard p.track != nil else { return }   // stopped again meanwhile
+        // Open onto the full cover, centred like the one in the oil, then settle it into the player's corner.
+        let wasFull = p.fullArt
+        if img != nil { p.fullArt = true }
+        withAnimation(.timingCurve(0.5, 0, 0.25, 1, duration: 1.6)) { open = 1 } completion: {
+            if p.track != nil { shown = false; album = nil }
+            guard img != nil, !wasFull else { return }
+            Task {
+                try? await Task.sleep(for: .seconds(0.5))
+                withAnimation(.smooth(duration: 0.9)) { p.fullArt = false }
+            }
+        }
+    }
+}
+
+// The Duo Player mark (docs/logo/duo-mark.svg): two mirrored rounded shapes, scaled to the frame.
+struct DuoMark: Shape {
+    static let path = svgPath("M189 258.889C189 233.304 189 220.511 194.375 213.083C199.065 206.603 206.276 202.409 214.227 201.538C223.342 200.539 234.461 206.866 256.698 219.518L308.62 249.06C328.424 260.327 338.325 265.961 345.53 273.892C351.905 280.909 356.723 289.194 359.67 298.205C363 308.389 363 319.781 363 342.566V415.434C363 438.219 363 449.611 359.67 459.795C356.723 468.806 351.905 477.091 345.53 484.108C338.325 492.039 328.424 497.673 308.62 508.94L256.698 538.482C234.461 551.134 223.342 557.461 214.227 556.462C206.276 555.591 199.065 551.397 194.375 544.917C189 537.489 189 524.696 189 499.111L189 379L189 258.889Z"
+        + "M569 258.889C569 233.304 569 220.511 563.625 213.083C558.935 206.603 551.724 202.409 543.773 201.538C534.658 200.539 523.539 206.866 501.302 219.518L449.38 249.06C429.576 260.327 419.675 265.961 412.47 273.892C406.095 280.909 401.277 289.194 398.33 298.205C395 308.389 395 319.781 395 342.566V415.434C395 438.219 395 449.611 398.33 459.795C401.277 468.806 406.095 477.091 412.47 484.108C419.675 492.039 429.576 497.673 449.38 508.94L501.302 538.482C523.539 551.134 534.658 557.461 543.773 556.462C551.724 555.591 558.935 551.397 563.625 544.917C569 537.489 569 524.696 569 499.111L569 379L569 258.889Z")
+
+    func path(in rect: CGRect) -> Path {
+        let b = Self.path.boundingRect, k = min(rect.width / b.width, rect.height / b.height)
+        return Self.path.applying(CGAffineTransform(translationX: rect.midX, y: rect.midY)
+            .scaledBy(x: k, y: k).translatedBy(x: -b.midX, y: -b.midY))
+    }
 }
 
 let spotifyGreen = Color(red: 0.114, green: 0.725, blue: 0.329)   // #1DB954
