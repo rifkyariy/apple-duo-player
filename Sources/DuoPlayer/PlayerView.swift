@@ -3,7 +3,6 @@ import AVFoundation
 
 struct PlayerView: View {
     @State private var p = Player()
-    @State private var booting = true
     @State private var resizing = false   // blur while the size switches
 
     // Grab bar under the front screen: drag down for the taller size, up to go back; click toggles.
@@ -64,8 +63,10 @@ struct PlayerView: View {
                     .allowsHitTesting(false)
             }
             .overlay(alignment: .topLeading) {
-                if booting {
-                    Splash { booting = false }
+                if p.booting {
+                    Splash(started: p.splashStarted ?? .now, fade: { p.signedIn }) { p.booting = false }
+                        .onAppear { if p.splashStarted == nil { p.splashStarted = .now } }
+                        .transition(.opacity)
                         .frame(width: screenW, height: screenH)
                         .clipShape(halfShape(right: true, radius: bodyRadius, hinge: hingeRadius))
                         .offset(x: margin + screenW, y: margin)
@@ -1120,9 +1121,12 @@ struct Art<P: View>: View {
     }
 }
 
-// Boot splash on the cover: the Duo Player oil-lens animation (splash.mp4, docs/logo) plays,
-// then a ripple opens from the corner and reveals the player.
+// Boot splash on the cover: the Duo Player oil-lens animation (splash.mp4, docs/logo) plays, then
+// signed in: it fades into the oil, where the song's cover rises (ConnectReveal);
+// signed out: a ripple opens from the corner and reveals the sign-in screen.
 struct Splash: View {
+    let started: Date   // resizing rebuilds the views mid-splash: resume, don't restart
+    let fade: () -> Bool
     let done: () -> Void
     @State private var ripple: CGFloat = 0   // 0 closed … 1 fully open
 
@@ -1130,7 +1134,7 @@ struct Splash: View {
         let d = hypot(screenW, screenH) * 2.2 * ripple   // hole diameter; grows from the bottom-left corner
         ZStack {
             Color.black
-            SplashVideo()
+            SplashVideo(at: Date().timeIntervalSince(started))
         }
         .mask {
             Rectangle().overlay(Circle().frame(width: d, height: d).blur(radius: 12).blendMode(.destinationOut)
@@ -1143,7 +1147,8 @@ struct Splash: View {
         }
         .allowsHitTesting(ripple < 0.5)
         .task {
-            try? await Task.sleep(for: .seconds(3.8))   // the clip is 4 s; open just before its last frame
+            try? await Task.sleep(for: .seconds(max(0, 3.8 - Date().timeIntervalSince(started))))   // the clip is 4 s; open just before its last frame
+            if fade() { withAnimation(.easeInOut(duration: 0.6)) { done() }; return }
             withAnimation(.timingCurve(0.5, 0, 0.2, 1, duration: 1.1)) { ripple = 1 }
             try? await Task.sleep(for: .seconds(1.15))
             done()
@@ -1153,12 +1158,14 @@ struct Splash: View {
 
 // The splash clip, muted, filling the cover (its black background bleeds past the crop).
 struct SplashVideo: NSViewRepresentable {
+    var at: Double = 0   // seconds into the clip
     func makeNSView(context: Context) -> NSView {
         let v = NSView()
         v.wantsLayer = true
         guard let url = Bundle.main.url(forResource: "splash", withExtension: "mp4") else { return v }
         let player = AVPlayer(url: url)
         player.isMuted = true
+        if at > 0.1 { player.seek(to: CMTime(seconds: at, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
         let layer = AVPlayerLayer(player: player)
         layer.videoGravity = .resizeAspectFill
         layer.backgroundColor = .black
@@ -1231,7 +1238,12 @@ struct ConnectReveal: View {
                 .allowsHitTesting(false)
             }
         }
-        .onAppear { shown = idle; text = p.message ?? "" }
+        .onAppear {
+            shown = idle || (p.signedIn && p.booting); text = p.message ?? ""
+            if shown, let t = p.track { Task { await reveal(t.art) } }   // rebuilt (resize) after the song had already arrived
+        }
+        // Launch, already signed in: the cover is up under the splash, so it opens onto the oil, then the song's reveal plays.
+        .onChange(of: p.signedIn) { if p.signedIn && p.booting { shown = true } }
         .onChange(of: p.message) { if let m = p.message, idle { text = m } }
         .onChange(of: idle) {
             guard idle else { return }
@@ -1244,6 +1256,7 @@ struct ConnectReveal: View {
     }
 
     func reveal(_ url: URL?) async {
+        while p.booting { try? await Task.sleep(for: .seconds(0.1)) }   // launch: the cover rises as the splash fades
         var img = url.flatMap { artCache.object(forKey: $0 as NSURL) }
         if img == nil, let url, let (data, _) = try? await URLSession.shared.data(from: url) {
             img = NSImage(data: data)

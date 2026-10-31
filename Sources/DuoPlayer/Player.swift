@@ -72,6 +72,8 @@ struct LibraryCache: Codable {
     var loggingIn = false           // sign-in button shows a spinner
     var tab = "Albums" { didSet { refreshQueueIfShown() } }   // left screen tab (here, not @State, so fold copies match)
     var showLyrics = false { didSet { refreshQueueIfShown() } }   // left screen: full lyrics instead of albums
+    var booting = true              // boot splash on screen (PlayerView); the connect reveal waits for it
+    var splashStarted: Date?        // the splash keeps its place when a resize rebuilds the views
     var fullArt = false             // first screen: album cover only
     var flashTick = 0               // camera shutter fired: the close dot flashes white
     var seeking = false             // user is dragging the seek bar; don't let polls fight it
